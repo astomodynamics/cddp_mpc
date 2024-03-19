@@ -17,12 +17,6 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 # find_package(tf2_geometry_msgs REQUIRED)
 
 
-add_executable(example_node src/example_node.cpp)
-ament_target_dependencies(example_node 
-  rclcpp 
-  Eigen3
-)
-
 add_executable(mpc_node src/mpc_node.cpp)
 ament_target_dependencies(mpc_node 
   rclcpp 
@@ -32,8 +26,7 @@ ament_target_dependencies(mpc_node
 # target_link_libraries(mpc_node cddp)
 
 install(TARGETS 
-  example_node 
-  # mpc_node
+  mpc_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
