@@ -1,29 +1,41 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.14)
 project(cddp_mpc_pkg)
 
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
+
+set(CMAKE_CXX_STANDARD 17) # Enforce C++17 as the minimum standard
+set(CMAKE_CXX_STANDARD_REQUIRED ON) 
+
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
-find_package(tf2 REQUIRED)
-find_package(tf2_geometry_msgs REQUIRED)
-find_package(Eigen3 3.4.0 REQUIRED)
-include_directories(${Eigen3_INCLUDE_DIRS}) 
+find_package(Eigen3 REQUIRED)
+include_directories(${EIGEN3_INCLUDE_DIR})
+# find_package(cddp REQUIRED)
+# find_package(tf2 REQUIRED)
+# find_package(tf2_geometry_msgs REQUIRED)
 
+
+add_executable(example_node src/example_node.cpp)
+ament_target_dependencies(example_node 
+  rclcpp 
+  Eigen3
+)
 
 add_executable(mpc_node src/mpc_node.cpp)
 ament_target_dependencies(mpc_node 
   rclcpp 
   geometry_msgs 
-  tf2
-  tf2_geometry_msgs
   Eigen3
 )
+# target_link_libraries(mpc_node cddp)
 
+install(TARGETS 
+  example_node 
+  # mpc_node
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
