@@ -12,10 +12,20 @@ find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
-# find_package(cddp REQUIRED)
 # find_package(tf2 REQUIRED)
 # find_package(tf2_geometry_msgs REQUIRED)
 
+
+# Find the include path for CDDP's header files
+find_path(CDDP_INCLUDE_DIR NAMES CDDP.hpp
+          PATHS /home/tom/github/CDDP-cpp/include/cddp)
+
+# Find the compiled library file
+find_library(CDDP_LIBRARY NAMES cddp
+             PATHS /home/tom/github/CDDP-cpp/build/lib)
+
+# Include the headers path
+include_directories(${CDDP_INCLUDE_DIR})
 
 add_executable(mpc_node src/mpc_node.cpp)
 ament_target_dependencies(mpc_node 
@@ -23,7 +33,8 @@ ament_target_dependencies(mpc_node
   geometry_msgs 
   Eigen3
 )
-# target_link_libraries(mpc_node cddp)
+target_link_libraries(mpc_node ${CDDP_LIBRARY})
+
 
 install(TARGETS 
   mpc_node
