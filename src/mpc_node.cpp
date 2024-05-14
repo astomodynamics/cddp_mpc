@@ -46,6 +46,8 @@ private:
         Eigen::VectorXd initialState(state_dim);
         initialState << 0.0, 0.0, 0.0; // Initial state
 
+        RCLCPP_INFO(this->get_logger(), "Setting up CDDP MPC");
+
         cddp::DubinsCar system(state_dim, control_dim, dt, integration_type); // Your DoubleIntegrator instance
         cddp::CDDPProblem cddp_solver(&system, initialState, horizon, dt);
     }
@@ -55,6 +57,7 @@ private:
         auto twist_msg = geometry_msgs::msg::Twist();
         // twist_msg.linear.x = u(0);
         // twist_msg.angular.z = u(1);
+        setupCDDPMPC();
 
         cmd_vel_publisher_->publish(twist_msg);
     }

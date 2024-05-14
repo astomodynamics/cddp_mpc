@@ -15,8 +15,17 @@ find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
 
 
+# Find the include path for CDDP's header files
+find_path(CDDP_INCLUDE_DIR NAMES CDDP.hpp
+          PATHS /home/tom/github/CDDP-cpp/include/cddp)
+
+# Find the compiled library file
+find_library(CDDP_LIBRARY NAMES cddp
+             PATHS /home/tom/github/CDDP-cpp/build/lib)
+
 # Enable FetchContent for downloading dependencies
 include(FetchContent)
+
 # OSQP-CPP
 if (NOT TARGET osqp-cpp OR NOT TARGET osqpstatic)
     message(STATUS "cddp_mpc_pkg: `osqp-cpp` targets not found. Attempting to fetch contents...")
@@ -31,14 +40,8 @@ else()
     find_package(osqp-cpp REQUIRED)
 endif()
 
-add_library(cddp src/cddp_core/CDDPProblem.cpp)
-target_link_libraries(cddp PUBLIC 
-    Eigen3::Eigen 
-    PRIVATE osqp-cpp ${CMAKE_DL_LIBS})
-
-target_include_directories(cddp PUBLIC 
-    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>" 
-    include/cddp)
+# Include the headers path
+include_directories(${CDDP_INCLUDE_DIR})
 
 add_executable(mpc_node src/mpc_node.cpp)
 ament_target_dependencies(mpc_node 
@@ -48,11 +51,8 @@ ament_target_dependencies(mpc_node
   Eigen3
 )
 
-target_include_directories(mpc_node PUBLIC 
-    ${CDDP_INCLUDE_DIRS} 
-    )
-target_link_directories(mpc_node PUBLIC include/cddp)
-target_link_libraries(mpc_node osqp-cpp)
+target_include_directories(mpc_node PUBLIC ${CDDP_INCLUDE_DIRS})
+target_link_libraries(mpc_node ${CDDP_LIBRARY} osqp-cpp)
 
 
 
