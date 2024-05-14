@@ -49,7 +49,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "Setting up CDDP MPC");
 
         cddp::DubinsCar system(state_dim, control_dim, dt, integration_type); // Your DoubleIntegrator instance
-        cddp::CDDPProblem cddp_solver(&system, initialState, horizon, dt);
+        cddp::CDDPProblem cddp_solver(initialState, horizon, dt);
     }
     void controlLoop(){
 

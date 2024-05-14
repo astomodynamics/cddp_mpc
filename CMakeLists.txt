@@ -43,7 +43,9 @@ endif()
 # Include the headers path
 include_directories(${CDDP_INCLUDE_DIR})
 
-add_executable(mpc_node src/mpc_node.cpp)
+set(CDDP_SRC /home/tom/github/CDDP-cpp/src/cddp_core/CDDPProblem.cpp)
+
+add_executable(mpc_node src/mpc_node.cpp ${CDDP_SRC})
 ament_target_dependencies(mpc_node 
   rclcpp 
   geometry_msgs 
