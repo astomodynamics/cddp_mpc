@@ -91,7 +91,10 @@ private:
             pose_stamped.pose.position.x = X[i](0);
             pose_stamped.pose.position.y = X[i](1);
             pose_stamped.pose.position.z = 0.0;
-            Eigen::Quaterniond quat = Eigen::AngleAxisd(X[i](2), Eigen::Vector3d::UnitZ());
+            
+            Eigen::VectorXd euler(3);
+            euler << 0.0, 0.0, X[i](2);
+            Eigen::Quaterniond quat = getQuaternionFromEuler(euler);
             pose_stamped.pose.orientation.x = quat.x();
             pose_stamped.pose.orientation.y = quat.y();
             pose_stamped.pose.orientation.z = quat.z();
@@ -106,8 +109,8 @@ private:
         // CDDP MPC Solver
         int state_dim = 3; 
         int control_dim = 2; 
-        double dt = 0.03;
-        int horizon = 100;
+        double dt = 0.03; // Time step; NOTE: This is a hyper-parameter and needs to be tuned
+        int horizon = 100; // Horizon; NOTE: This is a hyper-parameter and needs to be tuned
         int integration_type = 0; // 0 for Euler, 1 for Heun, 2 for RK3, 3 for RK4
 
         // Problem Setup
@@ -120,7 +123,7 @@ private:
 RCLCPP_INFO(this->get_logger(), "initial state values %f %f %f", initial_state_(0), initial_state_(1), initial_state_(2));
 RCLCPP_INFO(this->get_logger(), "goal state values %f %f %f", goal_state_(0), goal_state_(1), goal_state_(2));
 
-        // Simple Cost Matrices 
+        // Simple Cost Matrices; NOTE: These are hyper-parameters and need to be tuned
         Eigen::MatrixXd Q(state_dim, state_dim);
         Q << 0e-2, 0, 0, 
             0, 0e-2, 0, 
@@ -146,6 +149,7 @@ RCLCPP_INFO(this->get_logger(), "goal state values %f %f %f", goal_state_(0), go
         cddp::ControlBoxConstraint control_constraint(lower_bound, upper_bound);
         cddp_solver.addConstraint(std::make_unique<cddp::ControlBoxConstraint>(control_constraint));
 
+        // Set options
         cddp::CDDPOptions opts;
         opts.max_iterations = 20;
         // opts.cost_tolerance = 1e-6;
@@ -154,7 +158,7 @@ RCLCPP_INFO(this->get_logger(), "goal state values %f %f %f", goal_state_(0), go
 
         cddp_solver.setOptions(opts);
 
-        // // Set initial trajectory if needed
+        // Set initial trajectory 
         std::vector<Eigen::VectorXd> X = std::vector<Eigen::VectorXd>(horizon + 1, initial_state_);
         std::vector<Eigen::VectorXd> U = std::vector<Eigen::VectorXd>(horizon, Eigen::VectorXd::Zero(control_dim));
         cddp_solver.setInitialTrajectory(X, U);
@@ -182,6 +186,14 @@ RCLCPP_INFO(this->get_logger(), "Final state %f %f", X_sol[horizon](0), X_sol[ho
             euler(2) += 2*M_PI;
         }
         return euler;
+    }
+
+    Eigen::Quaterniond getQuaternionFromEuler(const Eigen::Vector3d& euler){
+        Eigen::AngleAxisd rollAngle(Eigen::AngleAxisd(euler(0), Eigen::Vector3d::UnitX()));
+        Eigen::AngleAxisd pitchAngle(Eigen::AngleAxisd(euler(1), Eigen::Vector3d::UnitY()));
+        Eigen::AngleAxisd yawAngle(Eigen::AngleAxisd(euler(2), Eigen::Vector3d::UnitZ()));
+        Eigen::Quaterniond quat = yawAngle * pitchAngle * rollAngle;
+        return quat;
     }
 
     geometry_msgs::msg::Pose goal_pose_;
