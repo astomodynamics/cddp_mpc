@@ -145,8 +145,8 @@ RCLCPP_INFO(this->get_logger(), "goal state values %f %f %f", goal_state_(0), go
 
         // Simple Cost Matrices; NOTE: These are hyper-parameters and need to be tuned
         Eigen::MatrixXd Q(state_dim, state_dim);
-        Q << 0e-2, 0, 0, 
-            0, 0e-2, 0, 
+        Q << 1e-2, 0, 0, 
+            0, 1e-2, 0, 
             0, 0, 0e-3;
         Eigen::MatrixXd R(control_dim, control_dim);
         R << 1e+0, 0, 
@@ -161,17 +161,17 @@ RCLCPP_INFO(this->get_logger(), "goal state values %f %f %f", goal_state_(0), go
 
         // Add constraints 
         Eigen::VectorXd lower_bound(control_dim);
-        lower_bound << -0.4, -M_PI;
+        lower_bound << -0.4, -2*M_PI;
 
         Eigen::VectorXd upper_bound(control_dim);
-        upper_bound << 0.4, M_PI;
+        upper_bound << 0.4, 2*M_PI;
 
         cddp::ControlBoxConstraint control_constraint(lower_bound, upper_bound);
         cddp_solver.addConstraint(std::make_unique<cddp::ControlBoxConstraint>(control_constraint));
 
         // Set options
         cddp::CDDPOptions opts;
-        opts.max_iterations = 20;
+        opts.max_iterations = 10;
         // opts.cost_tolerance = 1e-6;
         // opts.grad_tolerance = 1e-8;
         // opts.print_iterations = false;
