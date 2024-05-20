@@ -145,16 +145,16 @@ RCLCPP_INFO(this->get_logger(), "goal state values %f %f %f", goal_state_(0), go
 
         // Simple Cost Matrices; NOTE: These are hyper-parameters and need to be tuned
         Eigen::MatrixXd Q(state_dim, state_dim);
-        Q << 1e-2, 0, 0, 
-            0, 1e-2, 0, 
+        Q << 1e-1, 0, 0, 
+            0, 1e-1, 0, 
             0, 0, 0e-3;
         Eigen::MatrixXd R(control_dim, control_dim);
-        R << 1e+0, 0, 
-            0, 1e+0; 
+        R << 1e-1, 0, 
+            0, 1e-1; 
         Eigen::MatrixXd Qf(state_dim, state_dim);
-        Qf << 50, 0, 0, 
-            0, 50, 0, 
-            0, 0, 10; 
+        Qf << 100, 0, 0, 
+            0, 100, 0, 
+            0, 0, 0; 
 
         cddp::QuadraticCost objective(Q, R, Qf, goal_state_, timestep_);
         cddp_solver.setObjective(std::make_unique<cddp::QuadraticCost>(objective));
