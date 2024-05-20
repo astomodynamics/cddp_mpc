@@ -29,6 +29,9 @@ public:
         // Publish control command
         cmd_vel_publisher_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
 
+        // Publish local path
+        local_path_publisher_ = create_publisher<nav_msgs::msg::Path>("/local_path", 10);
+
         // Control loop
         control_timer_ = create_wall_timer(
             std::chrono::milliseconds(10), std::bind(&MPCNode::controlLoop, this));  
@@ -72,16 +75,35 @@ private:
         if (initial_state_.size() == 0 || goal_state_.size() == 0){
             return;
         }
-        Eigen::VectorXd u = solveCDDPMPC();
+        auto [u, X] = solveCDDPMPC();
 
         // Publish control command
         auto twist_msg = geometry_msgs::msg::Twist();
         twist_msg.linear.x = u(0);
         twist_msg.angular.z = u(1);
         cmd_vel_publisher_->publish(twist_msg);
+
+        // Publish local path
+        auto path_msg = nav_msgs::msg::Path();
+        path_msg.header.frame_id = "map";
+        for (int i = 0; i < X.size(); i++){
+            geometry_msgs::msg::PoseStamped pose_stamped;
+            pose_stamped.pose.position.x = X[i](0);
+            pose_stamped.pose.position.y = X[i](1);
+            pose_stamped.pose.position.z = 0.0;
+            Eigen::Quaterniond quat = Eigen::AngleAxisd(X[i](2), Eigen::Vector3d::UnitZ());
+            pose_stamped.pose.orientation.x = quat.x();
+            pose_stamped.pose.orientation.y = quat.y();
+            pose_stamped.pose.orientation.z = quat.z();
+            pose_stamped.pose.orientation.w = quat.w();
+            path_msg.poses.push_back(pose_stamped);
+        }
+
     }
 
-    Eigen::VectorXd solveCDDPMPC(){
+    // CDDP MPC Solver which returns control input and path
+    std::tuple<Eigen::VectorXd, std::vector<Eigen::VectorXd>> solveCDDPMPC(){
+        // CDDP MPC Solver
         int state_dim = 3; 
         int control_dim = 2; 
         double dt = 0.03;
@@ -147,7 +169,7 @@ RCLCPP_INFO(this->get_logger(), "goal state values %f %f %f", goal_state_(0), go
 
 RCLCPP_INFO(this->get_logger(), "Final state %f %f", X_sol[horizon](0), X_sol[horizon](1));
 
-        return u;
+        return std::make_tuple(u, X_sol);
     }
     
 
@@ -171,6 +193,7 @@ RCLCPP_INFO(this->get_logger(), "Final state %f %f", X_sol[horizon](0), X_sol[ho
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr pose_subscription_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscription_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher_;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr local_path_publisher_;
     rclcpp::TimerBase::SharedPtr control_timer_; 
 };
 
