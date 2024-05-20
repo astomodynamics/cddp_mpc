@@ -17,11 +17,13 @@ public:
         this->declare_parameter("timestep_", 0.05); // NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter("horizon_", 50); // NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter("processing_frequency_", 10.0); 
+        this->declare_parameter("goal_index_", 7); // Taking 7th element in the path as goal pose; NOTE: This is a hyper-parameter and needs to be tuned
 
         // Get parameters
         this->get_parameter("timestep_", timestep_);
         this->get_parameter("horizon_", horizon_);
         this->get_parameter("processing_frequency_", processing_frequency_);
+        this->get_parameter("goal_index_", goal_index_);
 
         // Subscribe goal pose
         goal_subscription_ =  create_subscription<geometry_msgs::msg::Pose>(
@@ -76,10 +78,14 @@ private:
         initial_state_ << msg->poses[0].pose.position.x, msg->poses[0].pose.position.y, euler(2);
 
         // Set goal state to the last pose in the path
-        q = msg->poses[msg->poses.size()-1].pose.orientation;
+        int path_size = msg->poses.size();
+        if (path_size < goal_index_){
+            goal_index_ = path_size - 1;
+        }
+        q = msg->poses[goal_index_].pose.orientation;
         quat = Eigen::Quaterniond(q.w, q.x, q.y, q.z);
         euler = getEulerFromQuaternion(quat);
-        goal_state_ << msg->poses[msg->poses.size()-1].pose.position.x, msg->poses[msg->poses.size()-1].pose.position.y, euler(2);
+        goal_state_ << msg->poses[goal_index_].pose.position.x, msg->poses[goal_index_].pose.position.y, euler(2);
 
         // Set reference path
         X_ref_.resize(msg->poses.size());
@@ -219,6 +225,7 @@ RCLCPP_INFO(this->get_logger(), "Final state %f %f", X_sol[horizon_](0), X_sol[h
     double timestep_;
     int horizon_;
     double processing_frequency_;
+    int goal_index_;
 
     geometry_msgs::msg::Pose goal_pose_;
     geometry_msgs::msg::Pose initial_pose_;
