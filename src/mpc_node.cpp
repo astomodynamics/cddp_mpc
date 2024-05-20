@@ -1,5 +1,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/pose.hpp"
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include <eigen3/Eigen/Dense>
@@ -126,6 +127,7 @@ private:
             pose_stamped.pose.orientation.w = quat.w();
             path_msg.poses.push_back(pose_stamped);
         }
+        local_path_publisher_->publish(path_msg);
 
     }
 
