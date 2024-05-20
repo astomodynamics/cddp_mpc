@@ -45,8 +45,6 @@ private:
         Eigen::Vector3d euler = getEulerFromQuaternion(quat);
         goal_state_.resize(3);
         goal_state_ << goal_pose_.position.x, goal_pose_.position.y, euler(2);
-
-        goal_state_ << 2.0, 2.0, M_PI/4.0;
     }
 
     void poseCallback(const geometry_msgs::msg::Pose::SharedPtr msg){
@@ -56,8 +54,6 @@ private:
         Eigen::Vector3d euler = getEulerFromQuaternion(quat);
         initial_state_.resize(3);
         initial_state_ << initial_pose_.position.x, initial_pose_.position.y, euler(2);
-
-        initial_state_ << 0.0, 0.0, M_PI/4; // Initial state
     }
 
     void pathCallback(const nav_msgs::msg::Path::SharedPtr msg){
@@ -65,9 +61,26 @@ private:
             return;
         }
         // Set initial state to the first pose in the path
-        initial_state_ << msg->poses[0].pose.position.x, msg->poses[0].pose.position.y, 0.0;
+        geometry_msgs::msg::Quaternion q = msg->poses[0].pose.orientation;
+        Eigen::Quaterniond quat(q.w, q.x, q.y, q.z);
+        Eigen::Vector3d euler = getEulerFromQuaternion(quat);
+        initial_state_ << msg->poses[0].pose.position.x, msg->poses[0].pose.position.y, euler(2);
+
         // Set goal state to the last pose in the path
-        goal_state_ << msg->poses[msg->poses.size()-1].pose.position.x, msg->poses[msg->poses.size()-1].pose.position.y, 0.0;
+        q = msg->poses[msg->poses.size()-1].pose.orientation;
+        quat = Eigen::Quaterniond(q.w, q.x, q.y, q.z);
+        euler = getEulerFromQuaternion(quat);
+        goal_state_ << msg->poses[msg->poses.size()-1].pose.position.x, msg->poses[msg->poses.size()-1].pose.position.y, euler(2);
+
+        // Set reference path
+        X_ref_.resize(msg->poses.size());
+        for (int i = 0; i < msg->poses.size(); i++){
+            geometry_msgs::msg::Quaternion q = msg->poses[i].pose.orientation;
+            Eigen::Quaterniond quat(q.w, q.x, q.y, q.z);
+            Eigen::Vector3d euler = getEulerFromQuaternion(quat);
+            X_ref_[i].resize(3);
+            X_ref_[i] << msg->poses[i].pose.position.x, msg->poses[i].pose.position.y, euler(2);
+        }
     }
 
     void controlLoop(){
@@ -109,8 +122,8 @@ private:
         // CDDP MPC Solver
         int state_dim = 3; 
         int control_dim = 2; 
-        double dt = 0.03; // Time step; NOTE: This is a hyper-parameter and needs to be tuned
-        int horizon = 100; // Horizon; NOTE: This is a hyper-parameter and needs to be tuned
+        double dt = 0.05; // Time step; NOTE: This is a hyper-parameter and needs to be tuned
+        int horizon = 50; // Horizon; NOTE: This is a hyper-parameter and needs to be tuned
         int integration_type = 0; // 0 for Euler, 1 for Heun, 2 for RK3, 3 for RK4
 
         // Problem Setup
@@ -195,11 +208,12 @@ RCLCPP_INFO(this->get_logger(), "Final state %f %f", X_sol[horizon](0), X_sol[ho
         Eigen::Quaterniond quat = yawAngle * pitchAngle * rollAngle;
         return quat;
     }
-
+    
     geometry_msgs::msg::Pose goal_pose_;
     geometry_msgs::msg::Pose initial_pose_;
     Eigen::VectorXd goal_state_;
     Eigen::VectorXd initial_state_;
+    std::vector<Eigen::VectorXd> X_ref_;
     
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr goal_subscription_;
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr pose_subscription_;
