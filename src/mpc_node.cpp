@@ -13,6 +13,15 @@
 class MPCNode : public rclcpp::Node {
 public:
     MPCNode() : Node("mpc_node") {
+        // Declare parameters
+        this->declare_parameter("timestep_", 0.05); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter("horizon_", 50); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter("processing_frequency_", 10.0); 
+
+        // Get parameters
+        this->get_parameter("timestep_", timestep_);
+        this->get_parameter("horizon_", horizon_);
+        this->get_parameter("processing_frequency_", processing_frequency_);
 
         // Subscribe goal pose
         goal_subscription_ =  create_subscription<geometry_msgs::msg::Pose>(
@@ -34,7 +43,7 @@ public:
 
         // Control loop
         control_timer_ = create_wall_timer(
-            std::chrono::milliseconds(10), std::bind(&MPCNode::controlLoop, this));  
+            std::chrono::milliseconds((int)(1000.0/processing_frequency_)), std::bind(&MPCNode::controlLoop, this));
     }
 
 private:
@@ -122,15 +131,13 @@ private:
         // CDDP MPC Solver
         int state_dim = 3; 
         int control_dim = 2; 
-        double dt = 0.05; // Time step; NOTE: This is a hyper-parameter and needs to be tuned
-        int horizon = 50; // Horizon; NOTE: This is a hyper-parameter and needs to be tuned
         int integration_type = 0; // 0 for Euler, 1 for Heun, 2 for RK3, 3 for RK4
 
         // Problem Setup
         RCLCPP_INFO(this->get_logger(), "Setting up CDDP MPC");
 
-        cddp::DubinsCar system(state_dim, control_dim, dt, integration_type); // Your DoubleIntegrator instance
-        cddp::CDDPProblem cddp_solver(initial_state_, goal_state_, horizon, dt);
+        cddp::DubinsCar system(state_dim, control_dim, timestep_, integration_type); // Your DoubleIntegrator instance
+        cddp::CDDPProblem cddp_solver(initial_state_, goal_state_, horizon_, timestep_);
         cddp_solver.setDynamicalSystem(std::make_unique<cddp::DubinsCar>(system));
 
 RCLCPP_INFO(this->get_logger(), "initial state values %f %f %f", initial_state_(0), initial_state_(1), initial_state_(2));
@@ -149,15 +156,15 @@ RCLCPP_INFO(this->get_logger(), "goal state values %f %f %f", goal_state_(0), go
             0, 50, 0, 
             0, 0, 10; 
 
-        cddp::QuadraticCost objective(Q, R, Qf, goal_state_, dt);
+        cddp::QuadraticCost objective(Q, R, Qf, goal_state_, timestep_);
         cddp_solver.setObjective(std::make_unique<cddp::QuadraticCost>(objective));
 
         // Add constraints 
         Eigen::VectorXd lower_bound(control_dim);
-        lower_bound << -5.0, -M_PI;
+        lower_bound << -0.4, -M_PI;
 
         Eigen::VectorXd upper_bound(control_dim);
-        upper_bound << 5.0, M_PI;
+        upper_bound << 0.4, M_PI;
 
         cddp::ControlBoxConstraint control_constraint(lower_bound, upper_bound);
         cddp_solver.addConstraint(std::make_unique<cddp::ControlBoxConstraint>(control_constraint));
@@ -172,8 +179,8 @@ RCLCPP_INFO(this->get_logger(), "goal state values %f %f %f", goal_state_(0), go
         cddp_solver.setOptions(opts);
 
         // Set initial trajectory 
-        std::vector<Eigen::VectorXd> X = std::vector<Eigen::VectorXd>(horizon + 1, initial_state_);
-        std::vector<Eigen::VectorXd> U = std::vector<Eigen::VectorXd>(horizon, Eigen::VectorXd::Zero(control_dim));
+        std::vector<Eigen::VectorXd> X = std::vector<Eigen::VectorXd>(horizon_ + 1, initial_state_);
+        std::vector<Eigen::VectorXd> U = std::vector<Eigen::VectorXd>(horizon_, Eigen::VectorXd::Zero(control_dim));
         cddp_solver.setInitialTrajectory(X, U);
 
         // Solve!
@@ -184,7 +191,7 @@ RCLCPP_INFO(this->get_logger(), "goal state values %f %f %f", goal_state_(0), go
         // Extract control
         Eigen::VectorXd u = U_sol[0];
 
-RCLCPP_INFO(this->get_logger(), "Final state %f %f", X_sol[horizon](0), X_sol[horizon](1));
+RCLCPP_INFO(this->get_logger(), "Final state %f %f", X_sol[horizon_](0), X_sol[horizon_](1));
 
         return std::make_tuple(u, X_sol);
     }
@@ -209,6 +216,10 @@ RCLCPP_INFO(this->get_logger(), "Final state %f %f", X_sol[horizon](0), X_sol[ho
         return quat;
     }
     
+    double timestep_;
+    int horizon_;
+    double processing_frequency_;
+
     geometry_msgs::msg::Pose goal_pose_;
     geometry_msgs::msg::Pose initial_pose_;
     Eigen::VectorXd goal_state_;
