@@ -3,11 +3,6 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include <eigen3/Eigen/Dense>
-// #include "tf2/LinearMath/Quaternion.h"
-// #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp> 
-
-// #include "cddp_core/CDDPProblem.hpp"
-// #include "cddp_core/Constraint.hpp"
 #include "CDDP.hpp"
 
 class MPCNode : public rclcpp::Node {
