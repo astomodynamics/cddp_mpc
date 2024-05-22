@@ -21,7 +21,7 @@ find_path(CDDP_INCLUDE_DIR NAMES CDDP.hpp
 
 # Find the compiled library file
 find_library(CDDP_LIBRARY NAMES cddp
-             PATHS /home/tom/github/CDDP-cpp/build/lib)
+             PATHS /home/tom/github/CDDP-cpp/build)
 
 # Enable FetchContent for downloading dependencies
 include(FetchContent)
