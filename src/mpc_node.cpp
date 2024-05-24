@@ -11,27 +11,27 @@ class MPCNode : public rclcpp::Node {
 public:
     MPCNode() : Node("mpc_node") {
         // Declare parameters
-        this->declare_parameter("timestep_", 0.05); // NOTE: This is a hyper-parameter and needs to be tuned
-        this->declare_parameter("horizon_", 50); // NOTE: This is a hyper-parameter and needs to be tuned
-        this->declare_parameter("processing_frequency_", 10.0); 
-        this->declare_parameter("goal_index_", 7); // Taking 7th element in the path as goal pose; NOTE: This is a hyper-parameter and needs to be tuned
-        this->declare_parameter("max_compute_time_", 0.1); // Maximum time allowed for computation
-        this->declare_parameter("v_max_", 0.4); // Maximum linear velocity
-        this->declare_parameter("omega_max_", 2*M_PI); // Maximum angular velocity
-        this->declare_parameter("a_max_", 0.4); // Maximum linear acceleration
-        this->declare_parameter("alpha_max_", 2*M_PI); // Maximum angular acceleration
-        this->declare_parameter("v_min_", -0.4); // Minimum linear velocity
-        this->declare_parameter("omega_min_", -2*M_PI); // Minimum angular velocity
-        this->declare_parameter("a_min_", -0.4); // Minimum linear acceleration
-        this->declare_parameter("alpha_min_", -2*M_PI); // Minimum angular acceleration
-        this->declare_parameter("Q_x_", 1e-1); // x position cost
-        this->declare_parameter("Q_y_", 1e-1); // y position cost
-        this->declare_parameter("Q_theta_", 0e-3); // yaw angle cost
-        this->declare_parameter("R_v_", 1e-1); // linear velocity cost
-        this->declare_parameter("R_omega_", 1e-1); // angular velocity cost
-        this->declare_parameter("Qf_x_", 100); // x position cost at final state
-        this->declare_parameter("Qf_y_", 100); // y position cost at final state
-        this->declare_parameter("Qf_theta_", 0); // yaw angle cost at final state
+        this->declare_parameter<double>("timestep_", 0.05); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<int>("horizon_", 50); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<double>("processing_frequency_", 10.0); 
+        this->declare_parameter<int>("goal_index_", 7); // Taking 7th element in the path as goal pose; NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<double>("max_compute_time_", 0.1); // Maximum time allowed for computation
+        this->declare_parameter<double>("v_max_", 0.4); // Maximum linear velocity
+        this->declare_parameter<double>("omega_max_", 2*M_PI); // Maximum angular velocity
+        this->declare_parameter<double>("a_max_", 0.4); // Maximum linear acceleration
+        this->declare_parameter<double>("alpha_max_", 2*M_PI); // Maximum angular acceleration
+        this->declare_parameter<double>("v_min_", -0.4); // Minimum linear velocity
+        this->declare_parameter<double>("omega_min_", -2*M_PI); // Minimum angular velocity
+        this->declare_parameter<double>("a_min_", -0.4); // Minimum linear acceleration
+        this->declare_parameter<double>("alpha_min_", -2*M_PI); // Minimum angular acceleration
+        this->declare_parameter<double>("Q_x_", 1e-1); // x position cost
+        this->declare_parameter<double>("Q_y_", 1e-1); // y position cost
+        this->declare_parameter<double>("Q_theta_", 0e-3); // yaw angle cost
+        this->declare_parameter<double>("R_v_", 1e-1); // linear velocity cost
+        this->declare_parameter<double>("R_omega_", 1e-1); // angular velocity cost
+        this->declare_parameter<double>("Qf_x_", 100); // x position cost at final state
+        this->declare_parameter<double>("Qf_y_", 100); // y position cost at final state
+        this->declare_parameter<double>("Qf_theta_", 0); // yaw angle cost at final state
 
         // Get parameters
         this->get_parameter("timestep_", timestep_);

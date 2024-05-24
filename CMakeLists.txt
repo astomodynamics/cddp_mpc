@@ -3,7 +3,8 @@ project(cddp_mpc)
 
 
 set(CMAKE_CXX_STANDARD 17) # Enforce C++17 as the minimum standard
-set(CMAKE_CXX_STANDARD_REQUIRED ON) 
+set(CMAKE_CXX_STANDARD_REQUIRED ON) # Enforce C++17 as the minimum standard
+set(ABSL_PROPAGATE_CXX_STD ON) # Enforce C++17 as the minimum standard
 
 
 # find dependencies
@@ -21,7 +22,7 @@ find_path(CDDP_INCLUDE_DIR NAMES CDDP.hpp
 
 # Find the compiled library file
 find_library(CDDP_LIBRARY NAMES cddp
-             PATHS /home/tom/github/CDDP-cpp/build/lib)
+             PATHS /home/tom/github/CDDP-cpp/build)
 
 # Enable FetchContent for downloading dependencies
 include(FetchContent)
