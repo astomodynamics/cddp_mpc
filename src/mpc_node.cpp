@@ -11,50 +11,50 @@ class MPCNode : public rclcpp::Node {
 public:
     MPCNode() : Node("mpc_node") {
         // Declare parameters
-        this->declare_parameter<double>("timestep_", 0.05); // NOTE: This is a hyper-parameter and needs to be tuned
-        this->declare_parameter<int>("horizon_", 50); // NOTE: This is a hyper-parameter and needs to be tuned
-        this->declare_parameter<double>("processing_frequency_", 10.0); 
-        this->declare_parameter<int>("goal_index_", 7); // Taking 7th element in the path as goal pose; NOTE: This is a hyper-parameter and needs to be tuned
-        this->declare_parameter<double>("max_compute_time_", 0.1); // Maximum time allowed for computation
-        this->declare_parameter<double>("v_max_", 0.4); // Maximum linear velocity
-        this->declare_parameter<double>("omega_max_", 2*M_PI); // Maximum angular velocity
-        this->declare_parameter<double>("a_max_", 0.4); // Maximum linear acceleration
-        this->declare_parameter<double>("alpha_max_", 2*M_PI); // Maximum angular acceleration
-        this->declare_parameter<double>("v_min_", -0.4); // Minimum linear velocity
-        this->declare_parameter<double>("omega_min_", -2*M_PI); // Minimum angular velocity
-        this->declare_parameter<double>("a_min_", -0.4); // Minimum linear acceleration
-        this->declare_parameter<double>("alpha_min_", -2*M_PI); // Minimum angular acceleration
-        this->declare_parameter<double>("Q_x_", 1e-1); // x position cost
-        this->declare_parameter<double>("Q_y_", 1e-1); // y position cost
-        this->declare_parameter<double>("Q_theta_", 0e-3); // yaw angle cost
-        this->declare_parameter<double>("R_v_", 1e-1); // linear velocity cost
-        this->declare_parameter<double>("R_omega_", 1e-1); // angular velocity cost
-        this->declare_parameter<double>("Qf_x_", 100); // x position cost at final state
-        this->declare_parameter<double>("Qf_y_", 100); // y position cost at final state
-        this->declare_parameter<double>("Qf_theta_", 0); // yaw angle cost at final state
+        this->declare_parameter<double>("timestep", 0.05); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<int>("horizon", 50); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<double>("processing_frequency", 10.0); 
+        this->declare_parameter<int>("goal_index", 7); // Taking 7th element in the path as goal pose; NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<double>("max_compute_time", 0.1); // Maximum time allowed for computation
+        this->declare_parameter<double>("v_max", 0.4); // Maximum linear velocity
+        this->declare_parameter<double>("omega_max", 2*M_PI); // Maximum angular velocity
+        this->declare_parameter<double>("a_max", 0.4); // Maximum linear acceleration
+        this->declare_parameter<double>("alpha_max", 2*M_PI); // Maximum angular acceleration
+        this->declare_parameter<double>("v_min", -0.4); // Minimum linear velocity
+        this->declare_parameter<double>("omega_min", -2*M_PI); // Minimum angular velocity
+        this->declare_parameter<double>("a_min", -0.4); // Minimum linear acceleration
+        this->declare_parameter<double>("alpha_min", -2*M_PI); // Minimum angular acceleration
+        this->declare_parameter<double>("Q_x", 1e-1); // x position cost
+        this->declare_parameter<double>("Q_y", 1e-1); // y position cost
+        this->declare_parameter<double>("Q_theta", 0e-3); // yaw angle cost
+        this->declare_parameter<double>("R_v", 1e-1); // linear velocity cost
+        this->declare_parameter<double>("R_omega", 1e-1); // angular velocity cost
+        this->declare_parameter<double>("Qf_x", 100); // x position cost at final state
+        this->declare_parameter<double>("Qf_y", 100); // y position cost at final state
+        this->declare_parameter<double>("Qf_theta", 0); // yaw angle cost at final state
 
         // Get parameters
-        this->get_parameter("timestep_", timestep_);
-        this->get_parameter("horizon_", horizon_);
-        this->get_parameter("processing_frequency_", processing_frequency_);
-        this->get_parameter("goal_index_", goal_index_);
-        this->get_parameter("max_compute_time_", max_compute_time_);
-        this->get_parameter("v_max_", v_max_);
-        this->get_parameter("omega_max_", omega_max_);
-        this->get_parameter("a_max_", a_max_);
-        this->get_parameter("alpha_max_", alpha_max_);
-        this->get_parameter("v_min_", v_min_);
-        this->get_parameter("omega_min_", omega_min_);
-        this->get_parameter("a_min_", a_min_);
-        this->get_parameter("alpha_min_", alpha_min_);
-        this->get_parameter("Q_x_", Q_x_);
-        this->get_parameter("Q_y_", Q_y_);
-        this->get_parameter("Q_theta_", Q_theta_);
-        this->get_parameter("R_v_", R_v_);
-        this->get_parameter("R_omega_", R_omega_);
-        this->get_parameter("Qf_x_", Qf_x_);
-        this->get_parameter("Qf_y_", Qf_y_);
-        this->get_parameter("Qf_theta_", Qf_theta_);
+        this->get_parameter("timestep", timestep_);
+        this->get_parameter("horizon", horizon_);
+        this->get_parameter("processing_frequency", processing_frequency_);
+        this->get_parameter("goal_index", goal_index_);
+        this->get_parameter("max_compute_time", max_compute_time_);
+        this->get_parameter("v_max", v_max_);
+        this->get_parameter("omega_max", omega_max_);
+        this->get_parameter("a_max", a_max_);
+        this->get_parameter("alpha_max", alpha_max_);
+        this->get_parameter("v_min", v_min_);
+        this->get_parameter("omega_min", omega_min_);
+        this->get_parameter("a_min", a_min_);
+        this->get_parameter("alpha_min", alpha_min_);
+        this->get_parameter("Q_x", Q_x_);
+        this->get_parameter("Q_y", Q_y_);
+        this->get_parameter("Q_theta", Q_theta_);
+        this->get_parameter("R_v", R_v_);
+        this->get_parameter("R_omega", R_omega_);
+        this->get_parameter("Qf_x", Qf_x_);
+        this->get_parameter("Qf_y", Qf_y_);
+        this->get_parameter("Qf_theta", Qf_theta_);
 
         // Subscribe goal pose
         goal_subscription_ =  create_subscription<geometry_msgs::msg::PoseStamped>(
