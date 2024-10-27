@@ -15,14 +15,16 @@ find_package(geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
 
+# FIXME: Change root path
+set(CDDP_ROOT /home/tom/github/cddp-cpp)
+message(STATUS "CDDP_ROOT: ${CDDP_ROOT}")
 
 # Find the include path for CDDP's header files
-find_path(CDDP_INCLUDE_DIR NAMES CDDP.hpp
-          PATHS /home/tom/github/CDDP-cpp/include/cddp)
+find_path(CDDP_INCLUDE_DIR NAMES cddp.hpp
+          PATHS ${CDDP_ROOT}/include/cddp-cpp)
+link_directories(${CDDP_ROOT}/build)
 
-# Find the compiled library file
-find_library(CDDP_LIBRARY NAMES cddp
-             PATHS /home/tom/github/CDDP-cpp/build)
+find_package(Python3 3.10 EXACT COMPONENTS Interpreter Development NumPy REQUIRED)
 
 # Enable FetchContent for downloading dependencies
 include(FetchContent)
@@ -41,12 +43,8 @@ else()
     find_package(osqp-cpp REQUIRED)
 endif()
 
-# Include the headers path
-include_directories(${CDDP_INCLUDE_DIR})
 
-set(CDDP_SRC /home/tom/github/CDDP-cpp/src/cddp_core/CDDPProblem.cpp)
-
-add_executable(mpc_node src/mpc_node.cpp ${CDDP_SRC})
+add_executable(mpc_node src/mpc_node.cpp)
 ament_target_dependencies(mpc_node 
   rclcpp 
   geometry_msgs 
@@ -54,11 +52,16 @@ ament_target_dependencies(mpc_node
   Eigen3
 )
 
-target_include_directories(mpc_node PUBLIC ${CDDP_INCLUDE_DIRS})
-target_link_libraries(mpc_node ${CDDP_LIBRARY} osqp-cpp)
+target_link_libraries(mpc_node cddp
+  osqp-cpp
+  Python3::Python
+  Python3::Module
+  Python3::NumPy
+)
 
-
-
+target_include_directories(mpc_node PUBLIC 
+    ${CDDP_INCLUDE_DIR}
+)
 install(TARGETS 
   mpc_node
   DESTINATION lib/${PROJECT_NAME}

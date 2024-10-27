@@ -5,33 +5,33 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <eigen3/Eigen/Dense>
-#include "CDDP.hpp"
+#include "cddp.hpp"
 
 class MPCNode : public rclcpp::Node {
 public:
     MPCNode() : Node("mpc_node") {
         // Declare parameters
-        this->declare_parameter<double>("timestep_", 0.05); // NOTE: This is a hyper-parameter and needs to be tuned
-        this->declare_parameter<int>("horizon_", 50); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<double>("timestep_", 0.03); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<int>("horizon_", 100); // NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter<double>("processing_frequency_", 10.0); 
         this->declare_parameter<int>("goal_index_", 7); // Taking 7th element in the path as goal pose; NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter<double>("max_compute_time_", 0.1); // Maximum time allowed for computation
-        this->declare_parameter<double>("v_max_", 0.4); // Maximum linear velocity
+        this->declare_parameter<double>("v_max_", 1.0); // Maximum linear velocity
         this->declare_parameter<double>("omega_max_", 2*M_PI); // Maximum angular velocity
         this->declare_parameter<double>("a_max_", 0.4); // Maximum linear acceleration
         this->declare_parameter<double>("alpha_max_", 2*M_PI); // Maximum angular acceleration
-        this->declare_parameter<double>("v_min_", -0.4); // Minimum linear velocity
+        this->declare_parameter<double>("v_min_", -1.0); // Minimum linear velocity
         this->declare_parameter<double>("omega_min_", -2*M_PI); // Minimum angular velocity
         this->declare_parameter<double>("a_min_", -0.4); // Minimum linear acceleration
         this->declare_parameter<double>("alpha_min_", -2*M_PI); // Minimum angular acceleration
-        this->declare_parameter<double>("Q_x_", 1e-1); // x position cost
-        this->declare_parameter<double>("Q_y_", 1e-1); // y position cost
+        this->declare_parameter<double>("Q_x_", 0e-1); // x position cost
+        this->declare_parameter<double>("Q_y_", 0e-1); // y position cost
         this->declare_parameter<double>("Q_theta_", 0e-3); // yaw angle cost
-        this->declare_parameter<double>("R_v_", 1e-1); // linear velocity cost
-        this->declare_parameter<double>("R_omega_", 1e-1); // angular velocity cost
-        this->declare_parameter<double>("Qf_x_", 100); // x position cost at final state
-        this->declare_parameter<double>("Qf_y_", 100); // y position cost at final state
-        this->declare_parameter<double>("Qf_theta_", 0); // yaw angle cost at final state
+        this->declare_parameter<double>("R_v_", 5e-1); // linear velocity cost
+        this->declare_parameter<double>("R_omega_", 5e-1); // angular velocity cost
+        this->declare_parameter<double>("Qf_x_", 50); // x position cost at final state
+        this->declare_parameter<double>("Qf_y_", 50); // y position cost at final state
+        this->declare_parameter<double>("Qf_theta_", 10.0); // yaw angle cost at final state
 
         // Get parameters
         this->get_parameter("timestep_", timestep_);
@@ -56,13 +56,15 @@ public:
         this->get_parameter("Qf_y_", Qf_y_);
         this->get_parameter("Qf_theta_", Qf_theta_);
 
+        RCLCPP_INFO(this->get_logger(), "MPC is initialized");
+
         // Subscribe goal pose
         goal_subscription_ =  create_subscription<geometry_msgs::msg::PoseStamped>(
             "/goal_pose", 10, std::bind(&MPCNode::goalCallback, this, std::placeholders::_1));
 
         // Subscribe current pose
-        pose_subscription_ = create_subscription<geometry_msgs::msg::PoseArray>(
-            "/robot_pose", 10, std::bind(&MPCNode::poseCallback, this, std::placeholders::_1));
+        pose_subscription_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+            "/pose", 10, std::bind(&MPCNode::poseCallback, this, std::placeholders::_1));
 
         // Subscribe path
         path_subscription_ = create_subscription<nav_msgs::msg::Path>(
@@ -87,15 +89,17 @@ private:
         Eigen::Vector3d euler = getEulerFromQuaternion(quat);
         goal_state_.resize(3);
         goal_state_ << goal_pose_.position.x, goal_pose_.position.y, euler(2);
+        RCLCPP_INFO(this->get_logger(), "goal state = [%f, %f, %f]", goal_state_(0), goal_state_(1), goal_state_(2));
     }
 
-    void poseCallback(const geometry_msgs::msg::PoseArray::SharedPtr msg){
-        initial_pose_ = (*msg).poses[0];
+    void poseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg){
+        initial_pose_ = msg->pose;
         geometry_msgs::msg::Quaternion q = initial_pose_.orientation;
         Eigen::Quaterniond quat(q.w, q.x, q.y, q.z);
         Eigen::Vector3d euler = getEulerFromQuaternion(quat);
         initial_state_.resize(3);
         initial_state_ << initial_pose_.position.x, initial_pose_.position.y, euler(2);
+        RCLCPP_INFO(this->get_logger(), "initial state = [%f, %f, %f]", initial_state_(0), initial_state_(1), initial_state_(2));
     }
 
     void pathCallback(const nav_msgs::msg::Path::SharedPtr msg){
@@ -177,19 +181,15 @@ private:
         // CDDP MPC Solver
         int state_dim = 3; 
         int control_dim = 2; 
-        int integration_type = 0; // 0 for Euler, 1 for Heun, 2 for RK3, 3 for RK4
+        std::string integration_type = "euler";
 
         // Problem Setup
-        RCLCPP_INFO(this->get_logger(), "Setting up CDDP MPC");
-        RCLCPP_INFO(this->get_logger(), "initial state = [%f, %f, %f]", initial_state_(0), initial_state_(1), initial_state_(2));
-        RCLCPP_INFO(this->get_logger(), "goal state = [%f, %f, %f]", goal_state_(0), goal_state_(1), goal_state_(2));
+        RCLCPP_INFO(this->get_logger(), "CDDP MPC: Setting up CDDP MPC solver");
+        RCLCPP_INFO(this->get_logger(), "CDDP MPC: Setting initial state = [%f, %f, %f]", initial_state_(0), initial_state_(1), initial_state_(2));
+        RCLCPP_INFO(this->get_logger(), "CDDP MPC: Setting goal state = [%f, %f, %f]", goal_state_(0), goal_state_(1), goal_state_(2));
 
-        // Define dynamical system
-        cddp::DubinsCar system(state_dim, control_dim, timestep_, integration_type); 
-
-        // Define CDDP Solver
-        cddp::CDDPProblem cddp_solver(initial_state_, goal_state_, horizon_, timestep_);
-        cddp_solver.setDynamicalSystem(std::make_unique<cddp::DubinsCar>(system)); // Set dynamical system
+        // Create a dubins car instance 
+        std::unique_ptr<cddp::DynamicalSystem> system = std::make_unique<cddp::DubinsCar>(timestep_, integration_type); // Create unique_ptr
 
         // Simple Cost Matrices; NOTE: These are hyper-parameters and need to be tuned
         Eigen::MatrixXd Q(state_dim, state_dim);
@@ -206,8 +206,14 @@ private:
             0, Qf_y_, 0, 
             0, 0, Qf_theta_;
 
-        cddp::QuadraticCost objective(Q, R, Qf, goal_state_, timestep_);
-        cddp_solver.setObjective(std::make_unique<cddp::QuadraticCost>(objective));
+        // Create an empty vector of Eigen::VectorXd
+        std::vector<Eigen::VectorXd> empty_reference_states; 
+        auto objective = std::make_unique<cddp::QuadraticObjective>(Q, R, Qf, goal_state_, empty_reference_states, timestep_);
+
+        // Create CDDP solver
+        cddp::CDDP cddp_solver(initial_state_, goal_state_, horizon_, timestep_);
+        cddp_solver.setDynamicalSystem(std::move(system));
+        cddp_solver.setObjective(std::move(objective));
 
         // Add constraints 
         Eigen::VectorXd lower_bound(control_dim);
@@ -216,35 +222,34 @@ private:
         Eigen::VectorXd upper_bound(control_dim);
         upper_bound << v_max_, omega_max_;
 
-        cddp::ControlBoxConstraint control_constraint(lower_bound, upper_bound);
-        cddp_solver.addConstraint(std::make_unique<cddp::ControlBoxConstraint>(control_constraint));
+        // Add the constraint to the solver
+        cddp_solver.addConstraint(std::string("ControlBoxConstraint"), std::make_unique<cddp::ControlBoxConstraint>(lower_bound, upper_bound));
+        auto constraint = cddp_solver.getConstraint<cddp::ControlBoxConstraint>("ControlBoxConstraint");
 
         // Set options
-        cddp::CDDPOptions opts;
-        opts.max_iterations = 10;
-        // opts.cost_tolerance = 1e-6;
-        // opts.grad_tolerance = 1e-8;
-        // opts.print_iterations = false;
+        cddp::CDDPOptions options;
+        options.max_iterations = 10;
+        cddp_solver.setOptions(options);
 
-        cddp_solver.setOptions(opts);
-
-        // Set initial trajectory 
-        std::vector<Eigen::VectorXd> X = std::vector<Eigen::VectorXd>(horizon_ + 1, initial_state_);
-        std::vector<Eigen::VectorXd> U = std::vector<Eigen::VectorXd>(horizon_, Eigen::VectorXd::Zero(control_dim));
+        // Set initial trajectory
+        std::vector<Eigen::VectorXd> X(horizon_ + 1, Eigen::VectorXd::Zero(state_dim));
+        std::vector<Eigen::VectorXd> U(horizon_, Eigen::VectorXd::Zero(control_dim));
         cddp_solver.setInitialTrajectory(X, U);
 
-        // Solve!
-        std::vector<Eigen::VectorXd> U_sol = cddp_solver.solve();
+        // Solve the problem
+        cddp::CDDPSolution solution = cddp_solver.solve();
 
-        // Get trajectory
-        std::vector<Eigen::VectorXd> X_sol = cddp_solver.getTrajectory();
+        // Extract solution
+        auto X_sol = solution.state_sequence; // size: horizon + 1
+        auto U_sol = solution.control_sequence; // size: horizon
+        auto t_sol = solution.time_sequence; // size: horizon + 1   
 
         // Extract control
         Eigen::VectorXd u = U_sol[0];
 
-RCLCPP_INFO(this->get_logger(), "Final state = [%f, %f]", X_sol[horizon_](0), X_sol[horizon_](1)); // DEBUG
+        RCLCPP_INFO(this->get_logger(), "Final state = [%f, %f]", X_sol[horizon_](0), X_sol[horizon_](1)); // DEBUG INFO
 
-        return std::make_tuple(u, X_sol);
+        return std::make_tuple(u, X_sol);   
     }
     
 
@@ -297,7 +302,7 @@ RCLCPP_INFO(this->get_logger(), "Final state = [%f, %f]", X_sol[horizon_](0), X_
     std::vector<Eigen::VectorXd> X_ref_;
     
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_subscription_;
-    rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr pose_subscription_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_subscription_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscription_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr local_path_publisher_;
@@ -314,13 +319,12 @@ int main(int argc, char **argv) {
 
 // TEST COMMANDS
 /*
+// In one terminal, run the following command
 ros2 run cddp_mpc mpc_node
 
-ros2 topic pub /goal_pose geometry_msgs/msg/Pose "{position: {x: 2.0, y: 2.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}" 
+// In another terminal, publish goal pose
+ros2 topic pub /pose geometry_msgs/msg/PoseStamped '{header: {stamp: {sec: 0, nanosec: 0}, frame_id: "map"}, pose: {position: {x: 0.0, y: 0.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}' 
 
-ros2 topic pub /robot_pose geometry_msgs/msg/Pose "{position: {x: 0.0, y: 0.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}" 
-
-ros2 topic pub /robot_pose geometry_msgs/PoseArray '{header: {stamp: {sec: 0, nanosec: 0}, frame_id: "map"}, poses: [ {position: {x: 4.5, y: 4.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}]}' 
-
-ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped '{header: {stamp: {sec: 0, nanosec: 0}, frame_id: "map"}, pose: {position: {x: 5.0, y: 2.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.02030303113745028, w: 0.9997938722189849}}}' 
+// In another terminal, publish goal pose
+ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped '{header: {stamp: {sec: 0, nanosec: 0}, frame_id: "map"}, pose: {position: {x: 2.0, y: 2.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.02030303113745028, w: 0.9997938722189849}}}' 
 */
