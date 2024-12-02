@@ -3,8 +3,8 @@
 
 ## Build CDDP Package
 ```bash
-git clone https://github.com/astomodynamics/CDDP-cpp
-cd CDDP-cpp
+git clone https://github.com/astomodynamics/cddp-cpp
+cd cddp-cpp
 mkdir build && cd build
 cmake ..
 make
