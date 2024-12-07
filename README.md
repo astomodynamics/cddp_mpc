@@ -4,7 +4,7 @@ A ROS package implementing Constrained Differential Dynamic Programming (CDDP) f
 
 ## Description
 
-This package provides a ROS implementation of CDDP-based Model Predictive Control. It integrates with the CDDP C++ library to enable real-time optimal control for robotic systems.
+This package provides a ROS implementation of CDDP-based Model Predictive Control. It integrates with the [CDDP C++ library](https://github.com/astomodynamics/cddp-cpp) to enable real-time optimal control for robotic systems.
 
 ## Prerequisites
 
