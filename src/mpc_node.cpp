@@ -215,11 +215,6 @@ private:
             initializeCDDP();
         }
 
-        // If reference path is not set, return
-        // if (X_ref_.size() == 0){
-        //     return;
-        // }
-
         // Solve CDDP MPC
         auto [u, X] = solveCDDPMPC();
 
