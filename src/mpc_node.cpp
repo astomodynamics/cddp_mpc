@@ -133,10 +133,86 @@ private:
         }
     }
 
+    void initializeCDDP() {
+        // ------------------------
+        //  Construct the CDDP solver
+        // ------------------------
+        int state_dim   = 3;  // (x, y, theta)
+        int control_dim = 2;  // (v, omega)
+
+        std::string integration_type = "euler";
+        auto system = std::make_unique<cddp::DubinsCar>(timestep_, integration_type);
+
+        Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(state_dim, state_dim);
+        Q(0,0)      = Q_x_;
+        Q(1,1)      = Q_y_;
+        Q(2,2)      = Q_theta_;
+
+        Eigen::MatrixXd R = Eigen::MatrixXd::Zero(control_dim, control_dim);
+        R(0,0)      = R_v_;
+        R(1,1)      = R_omega_;
+
+        Eigen::MatrixXd Qf = Eigen::MatrixXd::Zero(state_dim, state_dim);
+        Qf(0,0)     = Qf_x_;
+        Qf(1,1)     = Qf_y_;
+        Qf(2,2)     = Qf_theta_;
+
+        std::vector<Eigen::VectorXd> empty_reference_states;
+        auto objective = std::make_unique<cddp::QuadraticObjective>(
+            Q, R, Qf,
+            Eigen::VectorXd::Zero(3),
+            empty_reference_states,
+            timestep_
+        );
+
+        cddp_solver_ = std::make_unique<cddp::CDDP>(
+            Eigen::VectorXd::Zero(3),  
+            Eigen::VectorXd::Zero(3),  
+            horizon_,
+            timestep_
+        );
+
+        // Assign system and objective
+        cddp_solver_->setDynamicalSystem(std::move(system));
+        cddp_solver_->setObjective(std::move(objective));
+
+        // Add constraints 
+        Eigen::VectorXd lower_bound(control_dim);
+        lower_bound << v_min_, omega_min_;
+        Eigen::VectorXd upper_bound(control_dim);
+        upper_bound << v_max_, omega_max_;
+
+        cddp_solver_->addConstraint(
+            "ControlBoxConstraint",
+            std::make_unique<cddp::ControlBoxConstraint>(lower_bound, upper_bound)
+        );
+
+        // Set some solver options
+        cddp::CDDPOptions options;
+        options.max_iterations = 10;
+        options.cost_tolerance = 1e-2;
+        options.use_parallel = false;
+        options.num_threads = 1;
+        options.verbose = true;
+        options.debug = false;
+        cddp_solver_->setOptions(options);
+
+        // Provide an initial trajectory guess (X, U)
+        std::vector<Eigen::VectorXd> X(horizon_ + 1, Eigen::VectorXd::Zero(state_dim));
+        std::vector<Eigen::VectorXd> U(horizon_,     Eigen::VectorXd::Zero(control_dim));
+        cddp_solver_->setInitialTrajectory(X, U);
+
+        RCLCPP_INFO(this->get_logger(), "CDDP solver has been constructed");
+    }
+
     void controlLoop(){
         // If initial and goal states are not set, return
         if (initial_state_.size() == 0 || goal_state_.size() == 0){
             return;
+        }
+
+        if (cddp_solver_ == nullptr){
+            initializeCDDP();
         }
 
         // If reference path is not set, return
@@ -178,66 +254,21 @@ private:
 
     // CDDP MPC Solver which returns control input and path
     std::tuple<Eigen::VectorXd, std::vector<Eigen::VectorXd>> solveCDDPMPC(){
-        // CDDP MPC Solver
-        int state_dim = 3; 
-        int control_dim = 2; 
-        std::string integration_type = "euler";
+        int state_dim   = 3;  // (x, y, theta)
+        int control_dim = 2;  // (v, omega)
+        // Set initial state
+        cddp_solver_->setInitialState(initial_state_);
 
-        // Problem Setup
-        RCLCPP_INFO(this->get_logger(), "CDDP MPC: Setting up CDDP MPC solver");
-        RCLCPP_INFO(this->get_logger(), "CDDP MPC: Setting initial state = [%f, %f, %f]", initial_state_(0), initial_state_(1), initial_state_(2));
-        RCLCPP_INFO(this->get_logger(), "CDDP MPC: Setting goal state = [%f, %f, %f]", goal_state_(0), goal_state_(1), goal_state_(2));
-
-        // Create a dubins car instance 
-        std::unique_ptr<cddp::DynamicalSystem> system = std::make_unique<cddp::DubinsCar>(timestep_, integration_type); // Create unique_ptr
-
-        // Simple Cost Matrices; NOTE: These are hyper-parameters and need to be tuned
-        Eigen::MatrixXd Q(state_dim, state_dim);
-        Q << Q_x_, 0, 0, 
-            0, Q_y_, 0, 
-            0, 0, Q_theta_;
-
-        Eigen::MatrixXd R(control_dim, control_dim);
-        R << R_v_, 0, 
-            0, R_omega_;
-
-        Eigen::MatrixXd Qf(state_dim, state_dim);
-        Qf << Qf_x_, 0, 0, 
-            0, Qf_y_, 0, 
-            0, 0, Qf_theta_;
-
-        // Create an empty vector of Eigen::VectorXd
-        std::vector<Eigen::VectorXd> empty_reference_states; 
-        auto objective = std::make_unique<cddp::QuadraticObjective>(Q, R, Qf, goal_state_, empty_reference_states, timestep_);
-
-        // Create CDDP solver
-        cddp::CDDP cddp_solver(initial_state_, goal_state_, horizon_, timestep_);
-        cddp_solver.setDynamicalSystem(std::move(system));
-        cddp_solver.setObjective(std::move(objective));
-
-        // Add constraints 
-        Eigen::VectorXd lower_bound(control_dim);
-        lower_bound << v_min_, omega_min_;
-
-        Eigen::VectorXd upper_bound(control_dim);
-        upper_bound << v_max_, omega_max_;
-
-        // Add the constraint to the solver
-        cddp_solver.addConstraint(std::string("ControlBoxConstraint"), std::make_unique<cddp::ControlBoxConstraint>(lower_bound, upper_bound));
-        auto constraint = cddp_solver.getConstraint<cddp::ControlBoxConstraint>("ControlBoxConstraint");
-
-        // Set options
-        cddp::CDDPOptions options;
-        options.max_iterations = 10;
-        cddp_solver.setOptions(options);
+        // Set goal state
+        cddp_solver_->setReferenceState(goal_state_);
 
         // Set initial trajectory
         std::vector<Eigen::VectorXd> X(horizon_ + 1, Eigen::VectorXd::Zero(state_dim));
         std::vector<Eigen::VectorXd> U(horizon_, Eigen::VectorXd::Zero(control_dim));
-        cddp_solver.setInitialTrajectory(X, U);
+        cddp_solver_->setInitialTrajectory(X, U);
 
         // Solve the problem
-        cddp::CDDPSolution solution = cddp_solver.solve();
+        cddp::CDDPSolution solution = cddp_solver_->solve();
 
         // Extract solution
         auto X_sol = solution.state_sequence; // size: horizon + 1
@@ -300,6 +331,7 @@ private:
     Eigen::VectorXd goal_state_;
     Eigen::VectorXd initial_state_;
     std::vector<Eigen::VectorXd> X_ref_;
+    std::unique_ptr<cddp::CDDP> cddp_solver_;
     
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_subscription_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_subscription_;
@@ -327,4 +359,5 @@ ros2 topic pub /pose geometry_msgs/msg/PoseStamped '{header: {stamp: {sec: 0, na
 
 // In another terminal, publish goal pose
 ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped '{header: {stamp: {sec: 0, nanosec: 0}, frame_id: "map"}, pose: {position: {x: 2.0, y: 2.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.02030303113745028, w: 0.9997938722189849}}}' 
+
 */
