@@ -2,6 +2,8 @@
 
 A ROS package implementing Constrained Differential Dynamic Programming (CDDP) for Model Predictive Control (MPC).
 
+<img src="video/cddp_mpc_demo.gif" width="500" alt="">
+
 ## Description
 
 This package provides a ROS implementation of CDDP-based Model Predictive Control. It integrates with the [CDDP C++ library](https://github.com/astomodynamics/cddp-cpp) to enable real-time optimal control for robotic systems.
@@ -55,38 +57,19 @@ source ~/ros_ws/install/setup.bash
 
 To test the CDDP MPC controller, you'll need to run commands in three separate terminals.
 
-1. Launch the MPC Node
+1. Launch the Robot Node
+```bash
+ros2 launch cddp_mpc simple_robot_bringup.launch.py
+```
+2. Launch the MPC Node
+
 In your first terminal, start the MPC node:
 ```bash
 ros2 run cddp_mpc mpc_node
 ```
-2. In a second terminal, publish the initial pose:
-```bash
-ros2 topic pub /pose geometry_msgs/msg/PoseStamped '{
-    header: {
-        stamp: {sec: 0, nanosec: 0},
-        frame_id: "map"
-    },
-    pose: {
-        position: {x: 0.0, y: 0.0, z: 0.0},
-        orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
-    }
-}'
-```
-3. Publish Goal Pose
-In a third terminal, publish the goal pose:
-```bash
-ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped '{
-    header: {
-        stamp: {sec: 0, nanosec: 0},
-        frame_id: "map"
-    },
-    pose: {
-        position: {x: 2.0, y: 2.0, z: 0.0},
-        orientation: {x: 0.0, y: 0.0, z: 0.02030303113745028, w: 0.9997938722189849}
-    }
-}'
-```
+
+3. Select the robot goal at Rviz2 
+
 
 ## Contributing
 Contributions are welcome! Please feel free to submit pull requests.
