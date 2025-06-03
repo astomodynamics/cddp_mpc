@@ -178,8 +178,8 @@ private:
         upper_bound << v_max_, omega_max_;
 
         cddp_solver_->addConstraint(
-            "ControlBoxConstraint",
-            std::make_unique<cddp::ControlBoxConstraint>(lower_bound, upper_bound)
+            "ControlConstraint",
+            std::make_unique<cddp::ControlConstraint>(upper_bound)
         );
 
         // Set some solver options
