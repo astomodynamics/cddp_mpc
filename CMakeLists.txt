@@ -18,6 +18,8 @@ find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED) 
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
 # Enable FetchContent for downloading dependencies
 include(FetchContent)
@@ -30,7 +32,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cddp)
 
-
+# Build the MPC node.
 add_executable(mpc_node src/mpc_node.cpp)
 ament_target_dependencies(mpc_node 
   rclcpp 
@@ -43,10 +45,56 @@ target_link_libraries(mpc_node
   cddp
 )
 
+# Build the unicycle model library.
+# Assuming unicycle.hpp is in include/ and unicycle.cpp is in src/
+add_library(unicycle_lib
+  src/unicycle.cpp
+)
+target_include_directories(unicycle_lib PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(unicycle_lib rclcpp geometry_msgs)
+
+# Build the unicycle robot node.
+add_executable(unicycle_robot_node
+  src/unicycle_robot_node.cpp
+)
+target_link_libraries(unicycle_robot_node unicycle_lib)
+ament_target_dependencies(unicycle_robot_node
+  rclcpp
+  geometry_msgs
+  nav_msgs
+  tf2
+  tf2_geometry_msgs
+)
+
+# Build the teleop keyboard node.
+add_executable(teleop_keyboard_node
+  src/teleop_keyboard.cpp
+)
+ament_target_dependencies(teleop_keyboard_node rclcpp geometry_msgs)
+
+# Build the hardcoded map node.
+add_executable(hardcoded_map_node src/hardcoded_map_node.cpp)
+
+ament_target_dependencies(hardcoded_map_node rclcpp nav_msgs geometry_msgs)
+
+
 install(TARGETS 
   mpc_node
+  unicycle_robot_node
+  teleop_keyboard_node
+  hardcoded_map_node
+  unicycle_lib
   DESTINATION lib/${PROJECT_NAME}
 )
+
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME})
+
+install(DIRECTORY rviz
+  DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
