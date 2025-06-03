@@ -11,29 +11,27 @@ class MPCNode : public rclcpp::Node {
 public:
     MPCNode() : Node("mpc_node") {
         // Declare parameters
-        this->declare_parameter<double>("timestep_", 0.03); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<std::string>("robot_id", "robot_1");
+        this->declare_parameter<double>("timestep_", 0.1); // NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter<int>("horizon_", 40); // NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter<double>("processing_frequency_", 10.0); 
         this->declare_parameter<int>("goal_index_", 7); // Taking 7th element in the path as goal pose; NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter<double>("max_compute_time_", 0.1); // Maximum time allowed for computation
         this->declare_parameter<double>("v_max_", 1.0); // Maximum linear velocity
         this->declare_parameter<double>("omega_max_", 2*M_PI); // Maximum angular velocity
-        this->declare_parameter<double>("a_max_", 0.4); // Maximum linear acceleration
-        this->declare_parameter<double>("alpha_max_", 2*M_PI); // Maximum angular acceleration
         this->declare_parameter<double>("v_min_", -1.0); // Minimum linear velocity
         this->declare_parameter<double>("omega_min_", -2*M_PI); // Minimum angular velocity
-        this->declare_parameter<double>("a_min_", -0.4); // Minimum linear acceleration
-        this->declare_parameter<double>("alpha_min_", -2*M_PI); // Minimum angular acceleration
-        this->declare_parameter<double>("Q_x_", 0e-1); // x position cost
-        this->declare_parameter<double>("Q_y_", 0e-1); // y position cost
+        this->declare_parameter<double>("Q_x_", 1e-1); // x position cost
+        this->declare_parameter<double>("Q_y_", 1e-1); // y position cost
         this->declare_parameter<double>("Q_theta_", 0e-3); // yaw angle cost
-        this->declare_parameter<double>("R_v_", 5e-1); // linear velocity cost
-        this->declare_parameter<double>("R_omega_", 5e-1); // angular velocity cost
-        this->declare_parameter<double>("Qf_x_", 50); // x position cost at final state
-        this->declare_parameter<double>("Qf_y_", 50); // y position cost at final state
-        this->declare_parameter<double>("Qf_theta_", 10.0); // yaw angle cost at final state
+        this->declare_parameter<double>("R_v_", 1e-2); // linear velocity cost
+        this->declare_parameter<double>("R_omega_", 1e-2); // angular velocity cost
+        this->declare_parameter<double>("Qf_x_", 0e-1); // x position cost at final state
+        this->declare_parameter<double>("Qf_y_", 0e-1); // y position cost at final state
+        this->declare_parameter<double>("Qf_theta_", 0.0); // yaw angle cost at final state
 
         // Get parameters
+        robot_id_ = this->get_parameter("robot_id").as_string();
         this->get_parameter("timestep_", timestep_);
         this->get_parameter("horizon_", horizon_);
         this->get_parameter("processing_frequency_", processing_frequency_);
@@ -41,12 +39,8 @@ public:
         this->get_parameter("max_compute_time_", max_compute_time_);
         this->get_parameter("v_max_", v_max_);
         this->get_parameter("omega_max_", omega_max_);
-        this->get_parameter("a_max_", a_max_);
-        this->get_parameter("alpha_max_", alpha_max_);
         this->get_parameter("v_min_", v_min_);
         this->get_parameter("omega_min_", omega_min_);
-        this->get_parameter("a_min_", a_min_);
-        this->get_parameter("alpha_min_", alpha_min_);
         this->get_parameter("Q_x_", Q_x_);
         this->get_parameter("Q_y_", Q_y_);
         this->get_parameter("Q_theta_", Q_theta_);
@@ -64,17 +58,18 @@ public:
 
         // Subscribe current pose
         pose_subscription_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-            "/pose", 10, std::bind(&MPCNode::poseCallback, this, std::placeholders::_1));
+            robot_id_ + "/pose", 10, std::bind(&MPCNode::poseCallback, this, std::placeholders::_1));
 
         // Subscribe path
         path_subscription_ = create_subscription<nav_msgs::msg::Path>(
-            "/global_path", 10, std::bind(&MPCNode::pathCallback, this, std::placeholders::_1));
+            robot_id_ + "/global_path", 10, std::bind(&MPCNode::pathCallback, this, std::placeholders::_1));
 
         // Publish control command
-        cmd_vel_publisher_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+        cmd_vel_publisher_ = create_publisher<geometry_msgs::msg::Twist>(robot_id_ + "/cmd_vel", 10);
+        
 
         // Publish local path
-        local_path_publisher_ = create_publisher<nav_msgs::msg::Path>("/local_path", 10);
+        local_path_publisher_ = create_publisher<nav_msgs::msg::Path>(robot_id_ + "/local_path", 10);
 
         // Control loop
         control_timer_ = create_wall_timer(
@@ -190,16 +185,16 @@ private:
         // Set some solver options
         cddp::CDDPOptions options;
         options.max_iterations = 50;
-        options.cost_tolerance = 1e-3;
+        options.cost_tolerance = 1e-4;
         options.grad_tolerance = 1e-3;
         options.regularization_type = "control";
         options.regularization_control = 1e-2;
-        options.regularization_state = 1e-3;
+        options.regularization_state = 0.0;
         options.barrier_coeff = 1e-1;
         options.use_parallel = false;
         options.num_threads = 1;
         options.verbose = true;
-        options.debug = false;
+        options.debug = true;
         cddp_solver_->setOptions(options);
 
         // Provide an initial trajectory guess (X, U)
@@ -216,6 +211,7 @@ private:
             return;
         }
 
+        // Initialize CDDP solver
         if (cddp_solver_ == nullptr){
             initializeCDDP();
         }
@@ -224,10 +220,15 @@ private:
         auto [u, X] = solveCDDPMPC();
 
         // Publish control command
+        // Apply control limits for safety
+        u(0) = std::clamp(u(0), v_min_, v_max_);
+        u(1) = std::clamp(u(1), omega_min_, omega_max_);
         auto twist_msg = geometry_msgs::msg::Twist();
         twist_msg.linear.x = u(0);
         twist_msg.angular.z = u(1);
         cmd_vel_publisher_->publish(twist_msg);
+
+        RCLCPP_INFO(this->get_logger(), "Control command = [%f, %f]", u(0), u(1));
 
         // Publish local path
         auto path_msg = nav_msgs::msg::Path();
@@ -250,6 +251,7 @@ private:
         }
         local_path_publisher_->publish(path_msg);
 
+        RCLCPP_INFO(this->get_logger(), "Local path has been published");
     }
 
     // CDDP MPC Solver which returns control input and path
@@ -262,13 +264,20 @@ private:
         // Set goal state
         cddp_solver_->setReferenceState(goal_state_);
 
-        // Set initial trajectory
+        // Provide an initial trajectory guess (X, U)
         std::vector<Eigen::VectorXd> X(horizon_ + 1, Eigen::VectorXd::Zero(state_dim));
-        std::vector<Eigen::VectorXd> U(horizon_, Eigen::VectorXd::Zero(control_dim));
+        std::vector<Eigen::VectorXd> U(horizon_,     Eigen::VectorXd::Zero(control_dim));
+        X[0] = initial_state_;
+        for (int i = 0; i < horizon_; i++){
+            U[i] = Eigen::VectorXd::Zero(control_dim);
+            X[i+1] = initial_state_;
+        }
         cddp_solver_->setInitialTrajectory(X, U);
 
+        RCLCPP_INFO(this->get_logger(), "CDDP solver has been constructed");
+
         // Solve the problem
-        cddp::CDDPSolution solution = cddp_solver_->solve();
+        cddp::CDDPSolution solution = cddp_solver_->solve("CLDDP");
 
         // Extract solution
         auto X_sol = solution.state_sequence; // size: horizon + 1
@@ -277,7 +286,7 @@ private:
 
         // Extract control
         Eigen::VectorXd u = U_sol[0];
-
+    
         RCLCPP_INFO(this->get_logger(), "Final state = [%f, %f]", X_sol[horizon_](0), X_sol[horizon_](1)); // DEBUG INFO
 
         return std::make_tuple(u, X_sol);   
@@ -304,6 +313,7 @@ private:
     }
     
     // Member variables
+    std::string robot_id_;
     double timestep_;
     int horizon_;
     double processing_frequency_;
@@ -311,12 +321,8 @@ private:
     double max_compute_time_;
     double v_max_;
     double omega_max_;
-    double a_max_;
-    double alpha_max_;
     double v_min_;
     double omega_min_;
-    double a_min_;
-    double alpha_min_;
     double Q_x_;
     double Q_y_;
     double Q_theta_;
