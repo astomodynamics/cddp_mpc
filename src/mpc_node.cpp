@@ -12,7 +12,7 @@ public:
     MPCNode() : Node("mpc_node") {
         // Declare parameters
         this->declare_parameter<double>("timestep_", 0.03); // NOTE: This is a hyper-parameter and needs to be tuned
-        this->declare_parameter<int>("horizon_", 100); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<int>("horizon_", 40); // NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter<double>("processing_frequency_", 10.0); 
         this->declare_parameter<int>("goal_index_", 7); // Taking 7th element in the path as goal pose; NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter<double>("max_compute_time_", 0.1); // Maximum time allowed for computation
@@ -141,7 +141,7 @@ private:
         int control_dim = 2;  // (v, omega)
 
         std::string integration_type = "euler";
-        auto system = std::make_unique<cddp::DubinsCar>(timestep_, integration_type);
+        auto system = std::make_unique<cddp::Unicycle>(timestep_, integration_type);
 
         Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(state_dim, state_dim);
         Q(0,0)      = Q_x_;
@@ -183,14 +183,19 @@ private:
         upper_bound << v_max_, omega_max_;
 
         cddp_solver_->addConstraint(
-            "ControlBoxConstraint",
-            std::make_unique<cddp::ControlBoxConstraint>(lower_bound, upper_bound)
+            "ControlConstraint",
+            std::make_unique<cddp::ControlConstraint>(upper_bound)
         );
 
         // Set some solver options
         cddp::CDDPOptions options;
-        options.max_iterations = 10;
-        options.cost_tolerance = 1e-2;
+        options.max_iterations = 50;
+        options.cost_tolerance = 1e-3;
+        options.grad_tolerance = 1e-3;
+        options.regularization_type = "control";
+        options.regularization_control = 1e-2;
+        options.regularization_state = 1e-3;
+        options.barrier_coeff = 1e-1;
         options.use_parallel = false;
         options.num_threads = 1;
         options.verbose = true;
