@@ -12,7 +12,7 @@ public:
     MPCNode() : Node("mpc_node") {
         // Declare parameters
         this->declare_parameter<std::string>("robot_id", "robot_1");
-        this->declare_parameter<double>("timestep_", 0.03); // NOTE: This is a hyper-parameter and needs to be tuned
+        this->declare_parameter<double>("timestep_", 0.1); // NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter<int>("horizon_", 40); // NOTE: This is a hyper-parameter and needs to be tuned
         this->declare_parameter<double>("processing_frequency_", 10.0); 
         this->declare_parameter<int>("goal_index_", 7); // Taking 7th element in the path as goal pose; NOTE: This is a hyper-parameter and needs to be tuned
@@ -129,80 +129,80 @@ private:
     }
 
     void initializeCDDP() {
-        // // ------------------------
-        // //  Construct the CDDP solver
-        // // ------------------------
-        // int state_dim   = 3;  // (x, y, theta)
-        // int control_dim = 2;  // (v, omega)
+        // ------------------------
+        //  Construct the CDDP solver
+        // ------------------------
+        int state_dim   = 3;  // (x, y, theta)
+        int control_dim = 2;  // (v, omega)
 
-        // std::string integration_type = "euler";
-        // auto system = std::make_unique<cddp::Unicycle>(timestep_, integration_type);
+        std::string integration_type = "euler";
+        auto system = std::make_unique<cddp::Unicycle>(timestep_, integration_type);
 
-        // Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(state_dim, state_dim);
-        // Q(0,0)      = Q_x_;
-        // Q(1,1)      = Q_y_;
-        // Q(2,2)      = Q_theta_;
+        Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(state_dim, state_dim);
+        Q(0,0)      = Q_x_;
+        Q(1,1)      = Q_y_;
+        Q(2,2)      = Q_theta_;
 
-        // Eigen::MatrixXd R = Eigen::MatrixXd::Zero(control_dim, control_dim);
-        // R(0,0)      = R_v_;
-        // R(1,1)      = R_omega_;
+        Eigen::MatrixXd R = Eigen::MatrixXd::Zero(control_dim, control_dim);
+        R(0,0)      = R_v_;
+        R(1,1)      = R_omega_;
 
-        // Eigen::MatrixXd Qf = Eigen::MatrixXd::Zero(state_dim, state_dim);
-        // Qf(0,0)     = Qf_x_;
-        // Qf(1,1)     = Qf_y_;
-        // Qf(2,2)     = Qf_theta_;
+        Eigen::MatrixXd Qf = Eigen::MatrixXd::Zero(state_dim, state_dim);
+        Qf(0,0)     = Qf_x_;
+        Qf(1,1)     = Qf_y_;
+        Qf(2,2)     = Qf_theta_;
 
-        // std::vector<Eigen::VectorXd> empty_reference_states;
-        // auto objective = std::make_unique<cddp::QuadraticObjective>(
-        //     Q, R, Qf,
-        //     Eigen::VectorXd::Zero(3),
-        //     empty_reference_states,
-        //     timestep_
-        // );
+        std::vector<Eigen::VectorXd> empty_reference_states;
+        auto objective = std::make_unique<cddp::QuadraticObjective>(
+            Q, R, Qf,
+            Eigen::VectorXd::Zero(3),
+            empty_reference_states,
+            timestep_
+        );
 
-        // cddp_solver_ = std::make_unique<cddp::CDDP>(
-        //     Eigen::VectorXd::Zero(3),  
-        //     Eigen::VectorXd::Zero(3),  
-        //     horizon_,
-        //     timestep_
-        // );
+        cddp_solver_ = std::make_unique<cddp::CDDP>(
+            Eigen::VectorXd::Zero(3),  
+            Eigen::VectorXd::Zero(3),  
+            horizon_,
+            timestep_
+        );
 
-        // // Assign system and objective
-        // cddp_solver_->setDynamicalSystem(std::move(system));
-        // cddp_solver_->setObjective(std::move(objective));
+        // Assign system and objective
+        cddp_solver_->setDynamicalSystem(std::move(system));
+        cddp_solver_->setObjective(std::move(objective));
 
-        // // Add constraints 
-        // Eigen::VectorXd lower_bound(control_dim);
-        // lower_bound << v_min_, omega_min_;
-        // Eigen::VectorXd upper_bound(control_dim);
-        // upper_bound << v_max_, omega_max_;
+        // Add constraints 
+        Eigen::VectorXd lower_bound(control_dim);
+        lower_bound << v_min_, omega_min_;
+        Eigen::VectorXd upper_bound(control_dim);
+        upper_bound << v_max_, omega_max_;
 
-        // cddp_solver_->addConstraint(
-        //     "ControlBoxConstraint",
-        //     std::make_unique<cddp::ControlBoxConstraint>(lower_bound, upper_bound)
-        // );
+        cddp_solver_->addConstraint(
+            "ControlBoxConstraint",
+            std::make_unique<cddp::ControlBoxConstraint>(lower_bound, upper_bound)
+        );
 
-        // // Set some solver options
-        // cddp::CDDPOptions options;
-        // options.max_iterations = 50;
-        // options.cost_tolerance = 1e-4;
-        // options.grad_tolerance = 1e-3;
-        // options.regularization_type = "control";
-        // options.regularization_control = 1e-2;
-        // options.regularization_state = 0.0;
-        // options.barrier_coeff = 1e-1;
-        // options.use_parallel = false;
-        // options.num_threads = 1;
-        // options.verbose = true;
-        // options.debug = true;
-        // cddp_solver_->setOptions(options);
+        // Set some solver options
+        cddp::CDDPOptions options;
+        options.max_iterations = 50;
+        options.cost_tolerance = 1e-4;
+        options.grad_tolerance = 1e-3;
+        options.regularization_type = "control";
+        options.regularization_control = 1e-2;
+        options.regularization_state = 0.0;
+        options.barrier_coeff = 1e-1;
+        options.use_parallel = false;
+        options.num_threads = 1;
+        options.verbose = true;
+        options.debug = true;
+        cddp_solver_->setOptions(options);
 
-        // // Provide an initial trajectory guess (X, U)
-        // std::vector<Eigen::VectorXd> X(horizon_ + 1, Eigen::VectorXd::Zero(state_dim));
-        // std::vector<Eigen::VectorXd> U(horizon_,     Eigen::VectorXd::Zero(control_dim));
-        // cddp_solver_->setInitialTrajectory(X, U);
+        // Provide an initial trajectory guess (X, U)
+        std::vector<Eigen::VectorXd> X(horizon_ + 1, Eigen::VectorXd::Zero(state_dim));
+        std::vector<Eigen::VectorXd> U(horizon_,     Eigen::VectorXd::Zero(control_dim));
+        cddp_solver_->setInitialTrajectory(X, U);
 
-        // RCLCPP_INFO(this->get_logger(), "CDDP solver has been constructed");
+        RCLCPP_INFO(this->get_logger(), "CDDP solver has been constructed");
     }
 
     void controlLoop(){
@@ -211,7 +211,10 @@ private:
             return;
         }
 
-        // initializeCDDP();
+        // Initialize CDDP solver
+        if (cddp_solver_ == nullptr){
+            initializeCDDP();
+        }
 
         // Solve CDDP MPC
         auto [u, X] = solveCDDPMPC();
@@ -253,76 +256,13 @@ private:
 
     // CDDP MPC Solver which returns control input and path
     std::tuple<Eigen::VectorXd, std::vector<Eigen::VectorXd>> solveCDDPMPC(){
-        // ------------------------
-        //  Construct the CDDP solver
-        // ------------------------
         int state_dim   = 3;  // (x, y, theta)
         int control_dim = 2;  // (v, omega)
+        // Set initial state
+        cddp_solver_->setInitialState(initial_state_);
 
-        std::string integration_type = "euler";
-        auto system = std::make_unique<cddp::Unicycle>(timestep_, integration_type);
-
-        Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(state_dim, state_dim);
-        Q(0,0)      = Q_x_;
-        Q(1,1)      = Q_y_;
-        Q(2,2)      = Q_theta_;
-
-        Eigen::MatrixXd R = Eigen::MatrixXd::Zero(control_dim, control_dim);
-        R(0,0)      = R_v_;
-        R(1,1)      = R_omega_;
-
-        Eigen::MatrixXd Qf = Eigen::MatrixXd::Zero(state_dim, state_dim);
-        Qf(0,0)     = Qf_x_;
-        Qf(1,1)     = Qf_y_;
-        Qf(2,2)     = Qf_theta_;
-
-        std::vector<Eigen::VectorXd> reference_states(horizon_+1, Eigen::VectorXd::Zero(state_dim));
-        for (int i = 0; i < horizon_+1; i++){
-            reference_states[i] = goal_state_;
-        }
-        auto objective = std::make_unique<cddp::QuadraticObjective>(
-            Q, R, Qf,
-            goal_state_,
-            reference_states,
-            timestep_
-        );
-
-        cddp_solver_ = std::make_unique<cddp::CDDP>(
-            initial_state_,  
-            goal_state_,  
-            horizon_,
-            timestep_
-        );
-
-        // Assign system and objective
-        cddp_solver_->setDynamicalSystem(std::move(system));
-        cddp_solver_->setObjective(std::move(objective));
-
-        // Add constraints 
-        Eigen::VectorXd lower_bound(control_dim);
-        lower_bound << v_min_, omega_min_;
-        Eigen::VectorXd upper_bound(control_dim);
-        upper_bound << v_max_, omega_max_;
-
-        cddp_solver_->addConstraint(
-            "ControlBoxConstraint",
-            std::make_unique<cddp::ControlBoxConstraint>(lower_bound, upper_bound)
-        );
-
-        // Set some solver options
-        cddp::CDDPOptions options;
-        options.max_iterations = 50;
-        options.cost_tolerance = 1e-4;
-        options.grad_tolerance = 1e-3;
-        options.regularization_type = "control";
-        options.regularization_control = 1e-2;
-        options.regularization_state = 0.0;
-        options.barrier_coeff = 1e-1;
-        options.use_parallel = false;
-        options.num_threads = 1;
-        options.verbose = true;
-        options.debug = true;
-        cddp_solver_->setOptions(options);
+        // Set goal state
+        cddp_solver_->setReferenceState(goal_state_);
 
         // Provide an initial trajectory guess (X, U)
         std::vector<Eigen::VectorXd> X(horizon_ + 1, Eigen::VectorXd::Zero(state_dim));
