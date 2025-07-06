@@ -177,24 +177,21 @@ private:
         Eigen::VectorXd upper_bound(control_dim);
         upper_bound << v_max_, omega_max_;
 
-        cddp_solver_->addConstraint(
+        cddp_solver_->addPathConstraint(
             "ControlConstraint",
-            std::make_unique<cddp::ControlConstraint>(upper_bound)
+            std::make_unique<cddp::ControlConstraint>(upper_bound, lower_bound)
         );
 
         // Set some solver options
         cddp::CDDPOptions options;
         options.max_iterations = 50;
-        options.cost_tolerance = 1e-4;
-        options.grad_tolerance = 1e-3;
-        options.regularization_type = "control";
-        options.regularization_control = 1e-2;
-        options.regularization_state = 0.0;
-        options.barrier_coeff = 1e-1;
-        options.use_parallel = false;
+        options.tolerance = 1e-4;
+        options.acceptable_tolerance = 1e-3;
+        options.enable_parallel = false;
         options.num_threads = 1;
         options.verbose = true;
         options.debug = true;
+        options.regularization.initial_value = 1e-2;
         cddp_solver_->setOptions(options);
 
         // Provide an initial trajectory guess (X, U)
@@ -277,12 +274,12 @@ private:
         RCLCPP_INFO(this->get_logger(), "CDDP solver has been constructed");
 
         // Solve the problem
-        cddp::CDDPSolution solution = cddp_solver_->solve("CLDDP");
+        cddp::CDDPSolution solution = cddp_solver_->solve("MSIPDDP");
 
         // Extract solution
-        auto X_sol = solution.state_sequence; // size: horizon + 1
-        auto U_sol = solution.control_sequence; // size: horizon
-        auto t_sol = solution.time_sequence; // size: horizon + 1   
+        auto X_sol = std::any_cast<std::vector<Eigen::VectorXd>>(solution.at("state_trajectory")); // size: horizon + 1
+        auto U_sol = std::any_cast<std::vector<Eigen::VectorXd>>(solution.at("control_trajectory")); // size: horizon
+        auto t_sol = std::any_cast<std::vector<double>>(solution.at("time_points")); // size: horizon + 1   
 
         // Extract control
         Eigen::VectorXd u = U_sol[0];
