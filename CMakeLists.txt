@@ -45,6 +45,19 @@ target_link_libraries(mpc_node
   cddp
 )
 
+# Build the bicycle model MPC node.
+add_executable(car_mpc_node src/car_mpc_node.cpp)
+ament_target_dependencies(car_mpc_node 
+  rclcpp 
+  geometry_msgs 
+  nav_msgs
+  Eigen3
+)
+
+target_link_libraries(car_mpc_node 
+  cddp
+)
+
 # Build the unicycle model library.
 # Assuming unicycle.hpp is in include/ and unicycle.cpp is in src/
 add_library(unicycle_lib
@@ -83,6 +96,7 @@ ament_target_dependencies(hardcoded_map_node rclcpp nav_msgs geometry_msgs)
 
 install(TARGETS 
   mpc_node
+  car_mpc_node
   unicycle_robot_node
   teleop_keyboard_node
   hardcoded_map_node
