@@ -193,14 +193,16 @@ private:
 
         cddp_solver_->addPathConstraint(
             "ControlConstraint",
-            std::make_unique<cddp::ControlConstraint>(upper_bound, lower_bound)
+            std::make_unique<cddp::ControlConstraint>(lower_bound, upper_bound)
         );
 
         // Add state constraints on velocity
-        Eigen::VectorXd state_upper_bound(1);
-        state_upper_bound << 2.0;
+        Eigen::VectorXd state_lower_bound(state_dim);
+        state_lower_bound << -1e6, -1e6, -M_PI, -2.0;
+        Eigen::VectorXd state_upper_bound(state_dim);
+        state_upper_bound << 1e6, 1e6, M_PI, 2.0;
         cddp_solver_->addPathConstraint("StateConstraint",
-                                       std::make_unique<cddp::StateConstraint>(state_upper_bound));
+                                       std::make_unique<cddp::StateConstraint>(state_lower_bound, state_upper_bound));
 
         // Set some solver options
         cddp::CDDPOptions options;
@@ -298,9 +300,9 @@ private:
         cddp::CDDPSolution solution = cddp_solver_->solve("MSIPDDP");
 
         // Extract solution
-        auto X_sol = std::any_cast<std::vector<Eigen::VectorXd>>(solution.at("state_trajectory")); // size: horizon + 1
-        auto U_sol = std::any_cast<std::vector<Eigen::VectorXd>>(solution.at("control_trajectory")); // size: horizon
-        auto t_sol = std::any_cast<std::vector<double>>(solution.at("time_points")); // size: horizon + 1   
+        const auto& X_sol = solution.state_trajectory; // size: horizon + 1
+        const auto& U_sol = solution.control_trajectory; // size: horizon
+        const auto& t_sol = solution.time_points; // size: horizon + 1
 
         // Extract control
         Eigen::VectorXd u = U_sol[0];
