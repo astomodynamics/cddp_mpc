@@ -302,7 +302,6 @@ private:
         // Extract solution
         const auto& X_sol = solution.state_trajectory; // size: horizon + 1
         const auto& U_sol = solution.control_trajectory; // size: horizon
-        const auto& t_sol = solution.time_points; // size: horizon + 1
 
         // Extract control
         Eigen::VectorXd u = U_sol[0];
