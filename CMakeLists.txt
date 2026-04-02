@@ -14,107 +14,73 @@ set(CMAKE_BUILD_TYPE "Release") # Set the build type to Release by default
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(nav_msgs REQUIRED) 
-find_package(geometry_msgs REQUIRED) 
+find_package(px4_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
-find_package(tf2 REQUIRED)
-find_package(tf2_geometry_msgs REQUIRED)
 
 # Enable FetchContent for downloading dependencies
 include(FetchContent)
 
-# CDDP
-FetchContent_Declare(
-  cddp
-  GIT_REPOSITORY https://github.com/astomodynamics/cddp-cpp
-  GIT_TAG origin/master
-)
-FetchContent_MakeAvailable(cddp)
+set(CDDP_LOCAL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../cddp-cpp")
+if(EXISTS "${CDDP_LOCAL_SOURCE_DIR}/CMakeLists.txt")
+  message(STATUS "Using local cddp-cpp source from ${CDDP_LOCAL_SOURCE_DIR}")
+  set(CDDP_CPP_BUILD_TESTS OFF CACHE BOOL "Disable cddp-cpp tests in parent build" FORCE)
+  set(CDDP_CPP_BUILD_EXAMPLES OFF CACHE BOOL "Disable cddp-cpp examples in parent build" FORCE)
+  add_subdirectory("${CDDP_LOCAL_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/cddp-cpp-build" EXCLUDE_FROM_ALL)
+else()
+  FetchContent_Declare(
+    cddp
+    GIT_REPOSITORY https://github.com/astomodynamics/cddp-cpp
+    GIT_TAG origin/master
+  )
+  FetchContent_MakeAvailable(cddp)
+endif()
 
-# Build the MPC node.
-add_executable(mpc_node src/mpc_node.cpp)
-ament_target_dependencies(mpc_node 
-  rclcpp 
-  geometry_msgs 
-  nav_msgs
-  Eigen3
-)
-
-target_link_libraries(mpc_node 
-  cddp
-)
-
-# Build the bicycle model MPC node.
-add_executable(car_mpc_node src/car_mpc_node.cpp)
-ament_target_dependencies(car_mpc_node 
-  rclcpp 
-  geometry_msgs 
-  nav_msgs
-  Eigen3
-)
-
-target_link_libraries(car_mpc_node 
-  cddp
-)
-
-# Build the unicycle model library.
-# Assuming unicycle.hpp is in include/ and unicycle.cpp is in src/
-add_library(unicycle_lib
-  src/unicycle.cpp
-)
-target_include_directories(unicycle_lib PUBLIC
+add_executable(px4_mpc_node src/px4_mpc_node.cpp)
+target_include_directories(px4_mpc_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-ament_target_dependencies(unicycle_lib rclcpp geometry_msgs)
-
-# Build the unicycle robot node.
-add_executable(unicycle_robot_node
-  src/unicycle_robot_node.cpp
-)
-target_link_libraries(unicycle_robot_node unicycle_lib)
-ament_target_dependencies(unicycle_robot_node
+ament_target_dependencies(px4_mpc_node
   rclcpp
-  geometry_msgs
-  nav_msgs
-  tf2
-  tf2_geometry_msgs
+  px4_msgs
+  std_srvs
+  Eigen3
 )
-
-# Build the teleop keyboard node.
-add_executable(teleop_keyboard_node
-  src/teleop_keyboard.cpp
+target_link_libraries(px4_mpc_node
+  cddp
 )
-ament_target_dependencies(teleop_keyboard_node rclcpp geometry_msgs)
-
-# Build the hardcoded map node.
-add_executable(hardcoded_map_node src/hardcoded_map_node.cpp)
-
-ament_target_dependencies(hardcoded_map_node rclcpp nav_msgs geometry_msgs)
-
 
 install(TARGETS 
-  mpc_node
-  car_mpc_node
-  unicycle_robot_node
-  teleop_keyboard_node
-  hardcoded_map_node
-  unicycle_lib
+  px4_mpc_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME})
 
-install(DIRECTORY rviz
+install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME})
+
+install(DIRECTORY include/
+  DESTINATION include)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_gtest REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  ament_add_gtest(test_px4_utils test/test_px4_utils.cpp)
+  if(TARGET test_px4_utils)
+    target_include_directories(test_px4_utils PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+    )
+    ament_target_dependencies(test_px4_utils Eigen3)
+  endif()
 endif()
 
 ament_package()

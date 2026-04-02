@@ -1,0 +1,73 @@
+px4_mpc_node:
+  ros__parameters:
+    control_rate_hz: 50.0
+    solve_rate_hz: 10.0
+    mpc_dt: 0.1
+    horizon_steps: 20
+
+    # Mission behavior
+    takeoff_altitude_m: -3.0
+    hover_duration_s: 20.0
+    settle_tolerance_m: 0.3
+    hover_entry_vz_threshold_mps: 0.35
+    hover_entry_rate_threshold_rad_s: 0.3
+    hover_entry_dwell_s: 0.6
+    hover_reenter_error_m: 1.2
+    hover_reenter_dwell_s: 2.0
+    landing_enabled: true
+    landing_descent_rate_mps: 0.3
+    landing_touchdown_tolerance_m: 0.2
+    landing_touchdown_vz_threshold_mps: 0.2
+
+    # Start gate for hardware validation
+    auto_start_sequence: false
+    auto_engage_offboard: true
+    auto_arm: true
+    use_odometry_state: true
+    max_pending_solve_requests: 2
+
+    # Vehicle and command limits
+    mass_kg: 1.35
+    gravity_mps2: 9.81
+    hover_thrust_n: 0.0
+    min_thrust_n: 0.0
+    max_thrust_n: 20.0
+    thrust_norm_scale: 0.0
+    max_body_rate_rad_s: 0.8
+    target_yaw_rad: 0.0
+    px4_roll_rate_sign: 1.0
+    px4_pitch_rate_sign: 1.0
+    px4_yaw_rate_sign: 1.0
+
+    # Solver shaping
+    max_iterations: 8
+    solve_timeout_ms: 450.0
+    takeoff_min_thrust_margin_n: 1.0
+    min_flight_thrust_ratio: 0.55
+    hover_min_thrust_ratio: 1.0
+    landing_min_thrust_ratio: 0.3
+    thrust_slew_rate_n_per_s: 8.0
+    body_rate_slew_rad_s2: 4.0
+
+    # MPC objective weights
+    pos_weight: 1.5
+    vel_weight: 4.0
+    yaw_weight: 0.7
+    tilt_weight: 4.0
+    thrust_weight: 0.05
+    rate_weight: 0.05
+    terminal_pos_weight: 8.0
+    terminal_vel_weight: 4.0
+    terminal_yaw_weight: 3.0
+    terminal_tilt_weight: 8.0
+
+    # Logs
+    debug_logging_enabled: true
+
+    # PX4 state bridge
+    odom_quaternion_order: auto
+    odom_body_frame: auto
+    require_ned_pose_frame: true
+    require_ned_velocity_frame: true
+    expected_pose_frame_ned: 1
+    expected_velocity_frame_ned: 1

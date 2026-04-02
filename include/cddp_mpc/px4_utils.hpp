@@ -1,0 +1,199 @@
+#ifndef CDDP_MPC_PX4_UTILS_HPP
+#define CDDP_MPC_PX4_UTILS_HPP
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <optional>
+#include <string>
+
+#include <Eigen/Dense>
+
+namespace cddp_mpc {
+
+struct FrameAdapterConfig {
+  std::string quaternion_order{"auto"};
+  std::string odom_body_frame{"auto"};
+  bool require_ned_pose_frame{true};
+  bool require_ned_velocity_frame{true};
+  int expected_pose_frame_ned{1};
+  int expected_velocity_frame_ned{1};
+};
+
+struct NormalizedOdometry {
+  Eigen::Vector3d position{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d velocity{Eigen::Vector3d::Zero()};
+  Eigen::Quaterniond attitude_wxyz{Eigen::Quaterniond::Identity()};
+  Eigen::Vector3d angular_velocity{Eigen::Vector3d::Zero()};
+  bool frame_ok{true};
+  int pose_frame{0};
+  int velocity_frame{0};
+  std::string quat_order_used{"wxyz"};
+  std::string body_frame_used{"frd"};
+  double thrust_axis_world_z{0.0};
+};
+
+inline Eigen::Vector3d nedToEnu(const Eigen::Vector3d &ned) {
+  return Eigen::Vector3d(ned.y(), ned.x(), -ned.z());
+}
+
+inline Eigen::Quaterniond normalizeQuaternionWxyz(const Eigen::Vector4d &quat_wxyz) {
+  Eigen::Vector4d q = quat_wxyz;
+  const double norm = q.norm();
+  if (norm < 1e-8) {
+    return Eigen::Quaterniond::Identity();
+  }
+  q /= norm;
+  return Eigen::Quaterniond(q(0), q(1), q(2), q(3));
+}
+
+inline Eigen::Quaterniond quatNedToEnuWxyz(const Eigen::Quaterniond &q_ned) {
+  constexpr double kSqrtHalf = 0.70710678118654757;
+  const double qw = q_ned.w();
+  const double qx = q_ned.x();
+  const double qy = q_ned.y();
+  const double qz = q_ned.z();
+
+  Eigen::Vector4d q_enu_wxyz;
+  q_enu_wxyz << kSqrtHalf * (qw + qz), kSqrtHalf * (qx + qy),
+      kSqrtHalf * (qx - qy), kSqrtHalf * (qw - qz);
+  return normalizeQuaternionWxyz(q_enu_wxyz);
+}
+
+inline Eigen::Quaterniond quaternionFromYaw(double yaw_rad) {
+  const double half = 0.5 * yaw_rad;
+  return Eigen::Quaterniond(std::cos(half), 0.0, 0.0, std::sin(half));
+}
+
+inline Eigen::Quaterniond quaternionMultiplyWxyz(const Eigen::Quaterniond &a,
+                                                 const Eigen::Quaterniond &b) {
+  return Eigen::Quaterniond(
+      a.w() * b.w() - a.x() * b.x() - a.y() * b.y() - a.z() * b.z(),
+      a.w() * b.x() + a.x() * b.w() + a.y() * b.z() - a.z() * b.y(),
+      a.w() * b.y() - a.x() * b.z() + a.y() * b.w() + a.z() * b.x(),
+      a.w() * b.z() + a.x() * b.y() - a.y() * b.x() + a.z() * b.w());
+}
+
+inline Eigen::Vector3d bodyVectorFluToFrd(const Eigen::Vector3d &vec) {
+  return Eigen::Vector3d(vec.x(), -vec.y(), -vec.z());
+}
+
+inline Eigen::Quaterniond convertQuaternionOrder(const Eigen::Vector4d &raw_q,
+                                                 const std::string &requested_order,
+                                                 std::string *used_order) {
+  const Eigen::Quaterniond wxyz_candidate = normalizeQuaternionWxyz(raw_q);
+  const Eigen::Quaterniond xyzw_candidate =
+      normalizeQuaternionWxyz(Eigen::Vector4d(raw_q(3), raw_q(0), raw_q(1), raw_q(2)));
+
+  if (requested_order == "wxyz") {
+    if (used_order != nullptr) {
+      *used_order = "wxyz";
+    }
+    return wxyz_candidate;
+  }
+  if (requested_order == "xyzw") {
+    if (used_order != nullptr) {
+      *used_order = "xyzw";
+    }
+    return xyzw_candidate;
+  }
+
+  if (std::abs(wxyz_candidate.w()) >= std::abs(xyzw_candidate.w())) {
+    if (used_order != nullptr) {
+      *used_order = "wxyz";
+    }
+    return wxyz_candidate;
+  }
+  if (used_order != nullptr) {
+    *used_order = "xyzw";
+  }
+  return xyzw_candidate;
+}
+
+inline Eigen::Quaterniond convertBodyFrameToFrd(const Eigen::Quaterniond &quat_wxyz,
+                                                const std::string &requested_body_frame,
+                                                std::string *used_body_frame) {
+  const Eigen::Quaterniond q_frd = quat_wxyz.normalized();
+  const Eigen::Quaterniond q_flu_to_frd(0.0, 1.0, 0.0, 0.0);
+  const Eigen::Quaterniond q_from_flu =
+      quaternionMultiplyWxyz(q_frd, q_flu_to_frd).normalized();
+
+  if (requested_body_frame == "frd") {
+    if (used_body_frame != nullptr) {
+      *used_body_frame = "frd";
+    }
+    return q_frd;
+  }
+  if (requested_body_frame == "flu") {
+    if (used_body_frame != nullptr) {
+      *used_body_frame = "flu";
+    }
+    return q_from_flu;
+  }
+
+  const Eigen::Vector3d thrust_axis_frd =
+      q_frd.toRotationMatrix() * Eigen::Vector3d(0.0, 0.0, -1.0);
+  const Eigen::Vector3d thrust_axis_flu =
+      q_from_flu.toRotationMatrix() * Eigen::Vector3d(0.0, 0.0, -1.0);
+
+  if (thrust_axis_flu.z() < thrust_axis_frd.z()) {
+    if (used_body_frame != nullptr) {
+      *used_body_frame = "flu";
+    }
+    return q_from_flu;
+  }
+  if (used_body_frame != nullptr) {
+    *used_body_frame = "frd";
+  }
+  return q_frd;
+}
+
+inline NormalizedOdometry normalizeOdometry(
+    const Eigen::Vector3d &position, const Eigen::Vector3d &velocity,
+    const Eigen::Vector3d &angular_velocity, const Eigen::Vector4d &raw_q,
+    std::optional<int> pose_frame, std::optional<int> velocity_frame,
+    const FrameAdapterConfig &config) {
+  NormalizedOdometry odom;
+  odom.position = position;
+  odom.velocity = velocity;
+  odom.pose_frame = pose_frame.value_or(0);
+  odom.velocity_frame = velocity_frame.value_or(0);
+
+  odom.attitude_wxyz =
+      convertQuaternionOrder(raw_q, config.quaternion_order, &odom.quat_order_used);
+  odom.attitude_wxyz = convertBodyFrameToFrd(odom.attitude_wxyz, config.odom_body_frame,
+                                             &odom.body_frame_used);
+
+  odom.angular_velocity = angular_velocity;
+  if (odom.body_frame_used == "flu") {
+    odom.angular_velocity = bodyVectorFluToFrd(odom.angular_velocity);
+  }
+
+  odom.frame_ok = true;
+  if (config.require_ned_pose_frame && pose_frame.has_value()) {
+    odom.frame_ok = odom.frame_ok && (pose_frame.value() == config.expected_pose_frame_ned);
+  }
+  if (config.require_ned_velocity_frame && velocity_frame.has_value()) {
+    odom.frame_ok =
+        odom.frame_ok && (velocity_frame.value() == config.expected_velocity_frame_ned);
+  }
+
+  const Eigen::Vector3d thrust_axis_world =
+      odom.attitude_wxyz.toRotationMatrix() * Eigen::Vector3d(0.0, 0.0, -1.0);
+  odom.thrust_axis_world_z = thrust_axis_world.z();
+  return odom;
+}
+
+inline std::array<float, 3> thrustBodyFromCommand(double thrust_newtons,
+                                                  double max_thrust_newtons,
+                                                  double thrust_scale = 0.0) {
+  const double scale =
+      thrust_scale > 0.0 ? thrust_scale : 1.0 / std::max(max_thrust_newtons, 1e-6);
+  const double thrust_body_z =
+      std::clamp(-(thrust_newtons * scale), -1.0, 0.0);
+  return {0.0F, 0.0F, static_cast<float>(thrust_body_z)};
+}
+
+} // namespace cddp_mpc
+
+#endif
