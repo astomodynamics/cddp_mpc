@@ -11,6 +11,8 @@
 
 namespace cddp_mpc {
 
+inline constexpr double kQuadrotorModelYawMomentCoefficient = 0.1;
+
 struct FrameAdapterConfig {
   std::string quaternion_order{"auto"};
   std::string odom_body_frame{"auto"};
@@ -63,6 +65,15 @@ inline Eigen::Quaterniond quatNedToEnuWxyz(const Eigen::Quaterniond &q_ned) {
 inline Eigen::Quaterniond quaternionFromYaw(double yaw_rad) {
   const double half = 0.5 * yaw_rad;
   return Eigen::Quaterniond(std::cos(half), 0.0, 0.0, std::sin(half));
+}
+
+inline Eigen::Quaterniond yawNedToQuaternionEnu(double yaw_ned_rad) {
+  const double half = 0.5 * yaw_ned_rad;
+  constexpr double kSqrtHalf = 0.70710678118654757;
+  Eigen::Vector4d quat_wxyz;
+  quat_wxyz << kSqrtHalf * (std::cos(half) + std::sin(half)), 0.0, 0.0,
+      kSqrtHalf * (std::cos(half) - std::sin(half));
+  return normalizeQuaternionWxyz(quat_wxyz);
 }
 
 inline Eigen::Quaterniond quaternionMultiplyWxyz(const Eigen::Quaterniond &a,
@@ -192,6 +203,77 @@ inline std::array<float, 3> thrustBodyFromCommand(double thrust_newtons,
   const double thrust_body_z =
       std::clamp(-(thrust_newtons * scale), -1.0, 0.0);
   return {0.0F, 0.0F, static_cast<float>(thrust_body_z)};
+}
+
+inline Eigen::Vector4d motorForcesFromThrustTorque(double collective_thrust_newtons,
+                                                   const Eigen::Vector3d &body_torque_nm,
+                                                   double arm_length_m,
+                                                   double yaw_moment_coefficient) {
+  const double safe_arm_length = std::max(std::abs(arm_length_m), 1e-6);
+  const double safe_yaw_coeff = std::max(std::abs(yaw_moment_coefficient), 1e-6);
+
+  Eigen::Vector4d motor_forces;
+  motor_forces(0) = 0.25 * collective_thrust_newtons +
+                    0.5 * body_torque_nm.x() / safe_arm_length +
+                    0.25 * body_torque_nm.z() / safe_yaw_coeff;
+  motor_forces(1) = 0.25 * collective_thrust_newtons +
+                    0.5 * body_torque_nm.y() / safe_arm_length -
+                    0.25 * body_torque_nm.z() / safe_yaw_coeff;
+  motor_forces(2) = 0.25 * collective_thrust_newtons -
+                    0.5 * body_torque_nm.x() / safe_arm_length +
+                    0.25 * body_torque_nm.z() / safe_yaw_coeff;
+  motor_forces(3) = 0.25 * collective_thrust_newtons -
+                    0.5 * body_torque_nm.y() / safe_arm_length -
+                    0.25 * body_torque_nm.z() / safe_yaw_coeff;
+  return motor_forces;
+}
+
+inline Eigen::Vector4d projectThrustTorqueToMotorLimits(
+    const Eigen::Vector4d &command, double min_motor_thrust_n,
+    double max_motor_thrust_n, double arm_length_m,
+    double yaw_moment_coefficient) {
+  Eigen::Vector4d projected = command;
+  const double min_collective = 4.0 * std::max(0.0, min_motor_thrust_n);
+  const double max_collective =
+      4.0 * std::max(std::max(0.0, min_motor_thrust_n), max_motor_thrust_n);
+  projected(0) = std::clamp(projected(0), min_collective, max_collective);
+
+  const auto torque_is_feasible = [&](const Eigen::Vector3d &torque) {
+    const Eigen::Vector4d motor_forces = motorForcesFromThrustTorque(
+        projected(0), torque, arm_length_m, yaw_moment_coefficient);
+    return (motor_forces.array() >= min_motor_thrust_n - 1e-9).all() &&
+           (motor_forces.array() <= max_motor_thrust_n + 1e-9).all();
+  };
+
+  const Eigen::Vector3d torque = projected.tail<3>();
+  if (torque_is_feasible(torque)) {
+    return projected;
+  }
+
+  double lower = 0.0;
+  double upper = 1.0;
+  for (int i = 0; i < 32; ++i) {
+    const double mid = 0.5 * (lower + upper);
+    if (torque_is_feasible(mid * torque)) {
+      lower = mid;
+    } else {
+      upper = mid;
+    }
+  }
+  projected.tail<3>() *= lower;
+  return projected;
+}
+
+inline std::array<float, 3> torqueBodyFromCommand(const Eigen::Vector3d &body_torque_nm,
+                                                  const Eigen::Vector3d &torque_scale) {
+  std::array<float, 3> torque_body{};
+  for (int i = 0; i < 3; ++i) {
+    const double scale =
+        torque_scale(i) > 0.0 ? torque_scale(i) : 1.0 / std::max(std::abs(body_torque_nm(i)), 1e-6);
+    torque_body[static_cast<std::size_t>(i)] =
+        static_cast<float>(std::clamp(body_torque_nm(i) * scale, -1.0, 1.0));
+  }
+  return torque_body;
 }
 
 } // namespace cddp_mpc

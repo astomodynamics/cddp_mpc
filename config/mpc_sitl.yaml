@@ -12,17 +12,26 @@ px4_mpc_node:
     hover_entry_vz_threshold_mps: 0.35
     hover_entry_rate_threshold_rad_s: 0.3
     hover_entry_dwell_s: 0.6
+    hover_handoff_duration_s: 0.0
     hover_reenter_error_m: 1.2
     hover_reenter_dwell_s: 2.0
     landing_enabled: true
     landing_descent_rate_mps: 0.3
     landing_touchdown_tolerance_m: 0.2
     landing_touchdown_vz_threshold_mps: 0.2
-    # Enable a mild XY hold trim in hover. The MPC path already handles lift-off,
-    # but leaving these at zero lets small lateral velocity persist into drift.
-    hover_lateral_kp_rad_s_per_m: 0.35
-    hover_lateral_kd_rad_s_per_mps: 0.18
-    hover_lateral_correction_limit_rad_s: 0.20
+    ready_thrust_n: 0.0
+    fallback_hold_cycles: 5
+    fallback_descent_rate_mps: 0.2
+    solver_command_blend_alpha: 0.2
+    hover_vertical_kp_n_per_m: 0.0
+    hover_vertical_kd_n_per_mps: 0.0
+    hover_vertical_correction_limit_n: 0.0
+    # Enable a mild XY hold trim in hover. The thrust MPC now applies this as
+    # a body-torque correction after the solver output.
+    hover_lateral_kp_nm_per_m: 0.12
+    hover_lateral_kd_nm_per_mps: 0.06
+    hover_lateral_correction_limit_nm: 0.08
+    hover_torque_limit_nm: 0.12
 
     # Vehicle and command limits
     mass_kg: 1.35
@@ -31,21 +40,35 @@ px4_mpc_node:
     min_thrust_n: 0.0
     max_thrust_n: 20.0
     thrust_norm_scale: 0.0
-    max_body_rate_rad_s: 0.8
+    arm_length_m: 0.25
+    inertia_xx_kgm2: 0.029
+    inertia_yy_kgm2: 0.029
+    inertia_zz_kgm2: 0.055
+    yaw_moment_coefficient: 0.1
+    min_motor_thrust_n: 0.0
+    max_motor_thrust_n: 5.0
+    max_roll_torque_nm: 1.0
+    max_pitch_torque_nm: 1.0
+    max_yaw_torque_nm: 1.0
+    torque_norm_scale_x: 0.0
+    torque_norm_scale_y: 0.0
+    torque_norm_scale_z: 0.0
     target_yaw_rad: 0.0
-    px4_roll_rate_sign: 1.0
-    px4_pitch_rate_sign: 1.0
-    px4_yaw_rate_sign: 1.0
+    solver_type: CLDDP
+    reference_max_climb_rate_mps: 1.0
+    reference_max_climb_accel_mps2: 1.5
+    reference_smoothing_tau_s: 0.6
 
     # Solver shaping
-    max_iterations: 8
+    max_iterations: 4
+    constraint_tolerance: 0.2
     solve_timeout_ms: 450.0
     takeoff_min_thrust_margin_n: 1.0
     min_flight_thrust_ratio: 0.55
     hover_min_thrust_ratio: 1.0
     landing_min_thrust_ratio: 0.3
     thrust_slew_rate_n_per_s: 8.0
-    body_rate_slew_rad_s2: 4.0
+    body_torque_slew_nm_per_s: 2.5
 
     # MPC objective weights
     pos_weight: 1.5

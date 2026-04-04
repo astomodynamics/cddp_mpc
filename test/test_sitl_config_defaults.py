@@ -17,9 +17,9 @@ class SitlConfigDefaultsTest(unittest.TestCase):
         config_path = Path(__file__).resolve().parents[1] / "config" / "mpc_sitl.yaml"
         text = config_path.read_text()
 
-        self.assertGreater(_read_scalar(text, "hover_lateral_kp_rad_s_per_m"), 0.0)
-        self.assertGreater(_read_scalar(text, "hover_lateral_kd_rad_s_per_mps"), 0.0)
-        self.assertGreater(_read_scalar(text, "hover_lateral_correction_limit_rad_s"), 0.0)
+        self.assertGreater(_read_scalar(text, "hover_lateral_kp_nm_per_m"), 0.0)
+        self.assertGreater(_read_scalar(text, "hover_lateral_kd_nm_per_mps"), 0.0)
+        self.assertGreater(_read_scalar(text, "hover_lateral_correction_limit_nm"), 0.0)
 
 
 if __name__ == "__main__":

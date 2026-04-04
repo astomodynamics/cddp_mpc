@@ -3,13 +3,15 @@
 <package format="3">
   <name>cddp_mpc</name>
   <version>0.1.0</version>
-  <description>ROS 2 MPC nodes built on cddp-cpp, including PX4 offboard body-rate control.</description>
+  <description>ROS 2 MPC nodes built on cddp-cpp, including PX4 offboard thrust-and-torque control.</description>
   <maintainer email="tomo.sasaki.hiro@gmail.com">Tomo Sasaki</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>std_srvs</depend>
   <depend>px4_msgs</depend>
   <depend>eigen</depend>

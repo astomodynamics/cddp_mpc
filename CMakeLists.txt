@@ -13,6 +13,7 @@ set(CMAKE_BUILD_TYPE "Release") # Set the build type to Release by default
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -43,6 +44,7 @@ target_include_directories(px4_mpc_node PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(px4_mpc_node
+  diagnostic_msgs
   rclcpp
   px4_msgs
   std_srvs
@@ -63,24 +65,94 @@ install(DIRECTORY launch
 install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME})
 
+install(DIRECTORY examples
+  DESTINATION share/${PROJECT_NAME})
+
+install(DIRECTORY standalone
+  DESTINATION share/${PROJECT_NAME})
+
 install(DIRECTORY include/
   DESTINATION include)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  find_package(ament_cmake_gtest REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  find_package(Threads REQUIRED)
+  find_path(GTEST_INCLUDE_DIR gtest/gtest.h REQUIRED)
+  find_library(GTEST_LIBRARY gtest REQUIRED)
+  find_library(GTEST_MAIN_LIBRARY gtest_main REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 
-  ament_add_gtest(test_px4_utils test/test_px4_utils.cpp)
+  add_executable(test_px4_utils test/test_px4_utils.cpp)
   if(TARGET test_px4_utils)
     target_include_directories(test_px4_utils PUBLIC
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:include>
+      ${GTEST_INCLUDE_DIR}
     )
     ament_target_dependencies(test_px4_utils Eigen3)
+    target_link_libraries(test_px4_utils
+      ${GTEST_LIBRARY}
+      ${GTEST_MAIN_LIBRARY}
+      Threads::Threads
+    )
+    add_test(NAME test_px4_utils COMMAND test_px4_utils)
   endif()
+
+  add_executable(test_controller_logic test/test_controller_logic.cpp)
+  if(TARGET test_controller_logic)
+    target_include_directories(test_controller_logic PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+      ${GTEST_INCLUDE_DIR}
+    )
+    ament_target_dependencies(test_controller_logic Eigen3)
+    target_link_libraries(test_controller_logic
+      ${GTEST_LIBRARY}
+      ${GTEST_MAIN_LIBRARY}
+      Threads::Threads
+    )
+    add_test(NAME test_controller_logic COMMAND test_controller_logic)
+  endif()
+
+  add_executable(test_error_state_quadrotor_rate test/test_error_state_quadrotor_rate.cpp)
+  if(TARGET test_error_state_quadrotor_rate)
+    target_include_directories(test_error_state_quadrotor_rate PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+      ${GTEST_INCLUDE_DIR}
+    )
+    ament_target_dependencies(test_error_state_quadrotor_rate Eigen3)
+    target_link_libraries(test_error_state_quadrotor_rate
+      cddp
+      ${GTEST_LIBRARY}
+      ${GTEST_MAIN_LIBRARY}
+      Threads::Threads
+    )
+    add_test(NAME test_error_state_quadrotor_rate COMMAND test_error_state_quadrotor_rate)
+  endif()
+
+  add_test(
+    NAME test_validate_takeoff_hover_py
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_validate_takeoff_hover.py
+  )
+
+  add_test(
+    NAME test_calibrate_hover_mass_py
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_calibrate_hover_mass.py
+  )
+
+  add_test(
+    NAME test_px4_data_collector_py
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_px4_data_collector.py
+  )
+
+  add_test(
+    NAME test_sitl_config_defaults_py
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_sitl_config_defaults.py
+  )
 endif()
 
 ament_package()
