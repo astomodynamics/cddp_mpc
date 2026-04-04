@@ -18,6 +18,11 @@ px4_mpc_node:
     landing_descent_rate_mps: 0.3
     landing_touchdown_tolerance_m: 0.2
     landing_touchdown_vz_threshold_mps: 0.2
+    # Enable a mild XY hold trim in hover. The MPC path already handles lift-off,
+    # but leaving these at zero lets small lateral velocity persist into drift.
+    hover_lateral_kp_rad_s_per_m: 0.35
+    hover_lateral_kd_rad_s_per_mps: 0.18
+    hover_lateral_correction_limit_rad_s: 0.20
 
     # Vehicle and command limits
     mass_kg: 1.35
