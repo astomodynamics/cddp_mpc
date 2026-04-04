@@ -3,10 +3,12 @@
 ARG CUDA_VERSION=12.3.2
 ARG UBUNTU_VERSION=22.04
 ARG ROS_DISTRO=humble
+ARG MICRO_XRCE_AGENT_TAG=v2.4.3
 
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn9-devel-ubuntu${UBUNTU_VERSION} AS base
 
 ARG ROS_DISTRO
+ARG MICRO_XRCE_AGENT_TAG
 ENV ROS_DISTRO=${ROS_DISTRO}
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -25,6 +27,7 @@ RUN apt-get update && apt-get install -y \
     git \
     build-essential \
     cmake \
+    ninja-build \
     wget \
     libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -58,12 +61,16 @@ RUN pip3 install --no-cache-dir \
     jsonschema \
     jinja2
 
-RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/Micro-XRCE-DDS-Agent && \
-    cd /tmp/Micro-XRCE-DDS-Agent && \
-    mkdir build && cd build && \
-    cmake .. && \
-    make -j"$(nproc)" && \
-    make install && \
+RUN git clone --depth 1 --branch ${MICRO_XRCE_AGENT_TAG} \
+      https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/Micro-XRCE-DDS-Agent && \
+    cmake -S /tmp/Micro-XRCE-DDS-Agent -B /tmp/Micro-XRCE-DDS-Agent/build \
+      -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /tmp/Micro-XRCE-DDS-Agent/build --parallel "$(nproc)" && \
+    install -Dm0755 /tmp/Micro-XRCE-DDS-Agent/build/MicroXRCEAgent /usr/local/bin/MicroXRCEAgent && \
+    find /tmp/Micro-XRCE-DDS-Agent/build -type f \
+      \( -name 'libmicroxrcedds_agent.so*' -o -name 'libmicroxrcedds_client.so*' -o -name 'libmicrocdr.so*' -o -name 'libfastrtps.so*' -o -name 'libfastcdr.so*' \) \
+      -exec install -Dm0755 {} /usr/local/lib/ \; && \
     ldconfig /usr/local/lib/ && \
     rm -rf /tmp/Micro-XRCE-DDS-Agent
 
