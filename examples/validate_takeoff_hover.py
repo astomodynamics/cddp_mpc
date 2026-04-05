@@ -174,8 +174,18 @@ class HoverMissionValidator(Node):
     def _criteria(self) -> dict[str, bool]:
         validation_mode = self.config.validation_mode.strip().lower()
         offboard_validation = validation_mode == "offboard"
-        hover_mode_ok = "HOVER" in self.modes_seen or "LAND" in self.modes_seen or "LAND_DONE" in self.modes_seen
-        diagnostics_ok = self.diag_count > 0 and hover_mode_ok and self.solver_success_seen
+        hover_mode_ok = (
+            "HOVER" in self.modes_seen
+            or "LAND" in self.modes_seen
+            or "LAND_DONE" in self.modes_seen
+        )
+        hover_done_ok = "HOVER_DONE" in self.modes_seen
+        diagnostics_ok = True
+        if offboard_validation:
+            diagnostics_ok = self.diag_count > 0 and self.solver_success_seen
+            diagnostics_ok = diagnostics_ok and (
+                hover_done_ok if self.config.require_hover_done else hover_mode_ok
+            )
         landing_ok = True
         if self.config.require_landing:
             landing_ok = (

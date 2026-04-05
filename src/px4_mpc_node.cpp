@@ -1284,12 +1284,12 @@ private:
   }
 
   Eigen::Vector3d currentReferenceTargetEnu() const {
+    if (reference_mode_ == "configured_target") {
+      return Eigen::Vector3d(target_x_m_, target_y_m_, target_z_m_);
+    }
     if ((mode_ == "TAKEOFF" || mode_ == "HOVER" || mode_ == "LAND") &&
         setpoint_enu_.has_value()) {
       return *setpoint_enu_;
-    }
-    if (reference_mode_ == "configured_target") {
-      return Eigen::Vector3d(target_x_m_, target_y_m_, target_z_m_);
     }
     if (setpoint_enu_.has_value()) {
       return *setpoint_enu_;

@@ -109,16 +109,10 @@ inline Eigen::Quaterniond convertQuaternionOrder(const Eigen::Vector4d &raw_q,
     return xyzw_candidate;
   }
 
-  if (std::abs(wxyz_candidate.w()) >= std::abs(xyzw_candidate.w())) {
-    if (used_order != nullptr) {
-      *used_order = "wxyz";
-    }
-    return wxyz_candidate;
-  }
   if (used_order != nullptr) {
-    *used_order = "xyzw";
+    *used_order = "wxyz";
   }
-  return xyzw_candidate;
+  return wxyz_candidate;
 }
 
 inline Eigen::Quaterniond convertBodyFrameToFrd(const Eigen::Quaterniond &quat_wxyz,

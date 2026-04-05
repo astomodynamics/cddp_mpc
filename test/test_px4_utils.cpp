@@ -61,7 +61,7 @@ TEST(Px4UtilsTest, TorqueCommandWithoutScaleFallsBackToZero) {
   EXPECT_FLOAT_EQ(torque_body[2], 0.0F);
 }
 
-TEST(Px4UtilsTest, NormalizeOdometryAutoDetectsXyzwQuaternionOrder) {
+TEST(Px4UtilsTest, NormalizeOdometryAutoDefaultsToWxyzQuaternionOrder) {
   cddp_mpc::FrameAdapterConfig config;
   config.quaternion_order = "auto";
   config.odom_body_frame = "frd";
@@ -69,6 +69,23 @@ TEST(Px4UtilsTest, NormalizeOdometryAutoDetectsXyzwQuaternionOrder) {
   const cddp_mpc::NormalizedOdometry odom = cddp_mpc::normalizeOdometry(
       Eigen::Vector3d(1.0, 2.0, -3.0), Eigen::Vector3d::Zero(),
       Eigen::Vector3d::Zero(), Eigen::Vector4d(0.0, 0.0, 0.0, 1.0), 1, 1, config);
+
+  EXPECT_TRUE(odom.frame_ok);
+  EXPECT_EQ(odom.quat_order_used, "wxyz");
+  EXPECT_NEAR(odom.attitude_wxyz.w(), 0.0, 1e-9);
+  EXPECT_NEAR(odom.attitude_wxyz.x(), 0.0, 1e-9);
+  EXPECT_NEAR(odom.attitude_wxyz.y(), 0.0, 1e-9);
+  EXPECT_NEAR(odom.attitude_wxyz.z(), 1.0, 1e-9);
+}
+
+TEST(Px4UtilsTest, NormalizeOdometrySupportsExplicitXyzwQuaternionOrder) {
+  cddp_mpc::FrameAdapterConfig config;
+  config.quaternion_order = "xyzw";
+  config.odom_body_frame = "frd";
+
+  const cddp_mpc::NormalizedOdometry odom = cddp_mpc::normalizeOdometry(
+      Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(),
+      Eigen::Vector4d(0.0, 0.0, 0.0, 1.0), 1, 1, config);
 
   EXPECT_TRUE(odom.frame_ok);
   EXPECT_EQ(odom.quat_order_used, "xyzw");

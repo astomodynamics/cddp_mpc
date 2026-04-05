@@ -159,6 +159,9 @@ class ValidateTakeoffHoverTests(unittest.TestCase):
         config = self.validator_module.ValidationConfig(validation_mode="onboard")
         node = self.validator_module.HoverMissionValidator(config)
         _seed_success_basics(node)
+        node.diag_count = 0
+        node.modes_seen = set()
+        node.solver_success_seen = False
 
         criteria = node._criteria()
 
@@ -166,6 +169,31 @@ class ValidateTakeoffHoverTests(unittest.TestCase):
         self.assertTrue(criteria["heartbeat_stream"])
         self.assertTrue(criteria["thrust_stream"])
         self.assertTrue(criteria["torque_stream"])
+        self.assertTrue(criteria["diagnostics_ok"])
+
+    def test_require_hover_done_fails_without_hover_done_mode(self) -> None:
+        config = self.validator_module.ValidationConfig(
+            validation_mode="offboard",
+            require_hover_done=True,
+        )
+        node = self.validator_module.HoverMissionValidator(config)
+        _seed_success_basics(node)
+
+        criteria = node._criteria()
+
+        self.assertFalse(criteria["diagnostics_ok"])
+
+    def test_require_hover_done_passes_with_hover_done_mode(self) -> None:
+        config = self.validator_module.ValidationConfig(
+            validation_mode="offboard",
+            require_hover_done=True,
+        )
+        node = self.validator_module.HoverMissionValidator(config)
+        _seed_success_basics(node)
+        node.modes_seen = {"HOVER_DONE"}
+
+        criteria = node._criteria()
+
         self.assertTrue(criteria["diagnostics_ok"])
 
     def test_landing_requirement_checks_land_done_and_disarm(self) -> None:
