@@ -268,8 +268,7 @@ inline std::array<float, 3> torqueBodyFromCommand(const Eigen::Vector3d &body_to
                                                   const Eigen::Vector3d &torque_scale) {
   std::array<float, 3> torque_body{};
   for (int i = 0; i < 3; ++i) {
-    const double scale =
-        torque_scale(i) > 0.0 ? torque_scale(i) : 1.0 / std::max(std::abs(body_torque_nm(i)), 1e-6);
+    const double scale = torque_scale(i) > 0.0 ? torque_scale(i) : 0.0;
     torque_body[static_cast<std::size_t>(i)] =
         static_cast<float>(std::clamp(body_torque_nm(i) * scale, -1.0, 1.0));
   }

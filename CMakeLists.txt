@@ -38,7 +38,12 @@ else()
   FetchContent_MakeAvailable(cddp)
 endif()
 
-add_executable(px4_mpc_node src/px4_mpc_node.cpp)
+add_executable(
+  px4_mpc_node
+  src/px4_mpc_node.cpp
+  src/indi_rotational_compensator.cpp
+  src/reference_provider.cpp
+)
 target_include_directories(px4_mpc_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
@@ -132,6 +137,63 @@ if(BUILD_TESTING)
       Threads::Threads
     )
     add_test(NAME test_error_state_quadrotor_rate COMMAND test_error_state_quadrotor_rate)
+  endif()
+
+  add_executable(test_error_state_quadrotor_thrust test/test_error_state_quadrotor_thrust.cpp)
+  if(TARGET test_error_state_quadrotor_thrust)
+    target_include_directories(test_error_state_quadrotor_thrust PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+      ${GTEST_INCLUDE_DIR}
+    )
+    ament_target_dependencies(test_error_state_quadrotor_thrust Eigen3)
+    target_link_libraries(test_error_state_quadrotor_thrust
+      cddp
+      ${GTEST_LIBRARY}
+      ${GTEST_MAIN_LIBRARY}
+      Threads::Threads
+    )
+    add_test(NAME test_error_state_quadrotor_thrust COMMAND test_error_state_quadrotor_thrust)
+  endif()
+
+  add_executable(
+    test_reference_provider
+    test/test_reference_provider.cpp
+    src/reference_provider.cpp
+  )
+  if(TARGET test_reference_provider)
+    target_include_directories(test_reference_provider PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+      ${GTEST_INCLUDE_DIR}
+    )
+    ament_target_dependencies(test_reference_provider Eigen3)
+    target_link_libraries(test_reference_provider
+      ${GTEST_LIBRARY}
+      ${GTEST_MAIN_LIBRARY}
+      Threads::Threads
+    )
+    add_test(NAME test_reference_provider COMMAND test_reference_provider)
+  endif()
+
+  add_executable(
+    test_indi_rotational_compensator
+    test/test_indi_rotational_compensator.cpp
+    src/indi_rotational_compensator.cpp
+  )
+  if(TARGET test_indi_rotational_compensator)
+    target_include_directories(test_indi_rotational_compensator PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+      ${GTEST_INCLUDE_DIR}
+    )
+    ament_target_dependencies(test_indi_rotational_compensator Eigen3)
+    target_link_libraries(test_indi_rotational_compensator
+      ${GTEST_LIBRARY}
+      ${GTEST_MAIN_LIBRARY}
+      Threads::Threads
+    )
+    add_test(NAME test_indi_rotational_compensator COMMAND test_indi_rotational_compensator)
   endif()
 
   add_test(

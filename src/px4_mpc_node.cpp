@@ -26,13 +26,21 @@
 #include <px4_msgs/msg/vehicle_thrust_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_torque_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_status.hpp>
+#if __has_include(<px4_msgs/msg/vehicle_angular_velocity.hpp>)
+#include <px4_msgs/msg/vehicle_angular_velocity.hpp>
+#define CDDP_MPC_HAS_VEHICLE_ANGULAR_VELOCITY 1
+#else
+#define CDDP_MPC_HAS_VEHICLE_ANGULAR_VELOCITY 0
+#endif
 #include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
 #include "cddp.hpp"
 #include "cddp_mpc/controller_logic.hpp"
 #include "cddp_mpc/error_state_quadrotor_thrust.hpp"
+#include "cddp_mpc/indi_rotational_compensator.hpp"
 #include "cddp_mpc/px4_utils.hpp"
+#include "cddp_mpc/reference_provider.hpp"
 #include "cddp_mpc/thrust_allocation_constraint.hpp"
 
 using namespace std::chrono_literals;
@@ -47,9 +55,13 @@ using px4_msgs::msg::VehicleOdometry;
 using px4_msgs::msg::VehicleThrustSetpoint;
 using px4_msgs::msg::VehicleTorqueSetpoint;
 using px4_msgs::msg::VehicleStatus;
+#if CDDP_MPC_HAS_VEHICLE_ANGULAR_VELOCITY
+using px4_msgs::msg::VehicleAngularVelocity;
+#endif
 using diagnostic_msgs::msg::DiagnosticArray;
 using diagnostic_msgs::msg::DiagnosticStatus;
 using diagnostic_msgs::msg::KeyValue;
+using cddp_mpc::ReferenceTrajectory;
 
 std::string formatDouble(double value, int precision = 3) {
   if (!std::isfinite(value)) {
@@ -88,9 +100,10 @@ struct PendingSolve {
   std::future<SolveResult> future;
 };
 
-struct ReferenceTrajectory {
-  std::vector<Eigen::VectorXd> states;
-  std::vector<Eigen::VectorXd> controls;
+struct SafetyTrace {
+  std::string last_modified_layer{"none"};
+  bool fallback_active{false};
+  bool projection_changed_command{false};
 };
 
 class TrackingQuadraticObjective : public cddp::Objective {
@@ -208,10 +221,17 @@ public:
     loadParameters();
     mission_start_requested_ = auto_start_sequence_;
     hover_thrust_n_ = hover_thrust_n_ > 0.0 ? hover_thrust_n_ : mass_kg_ * gravity_mps2_;
+    reference_provider_ = std::make_unique<cddp_mpc::PositionYawReferenceProvider>(
+        buildReferenceConfig());
+    rotational_indi_ =
+        std::make_unique<cddp_mpc::IndiRotationalCompensator>(inertiaMatrix());
+    rotational_indi_->setConfig(buildIndiConfig());
     last_solver_command_ = hoverCommand(0.0);
     last_command_ = last_solver_command_;
     last_good_command_ = last_solver_command_;
     last_published_command_ = last_solver_command_;
+    last_nominal_command_ = last_solver_command_;
+    last_corrected_command_ = last_solver_command_;
 
     auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
 
@@ -227,6 +247,11 @@ public:
     vehicle_status_sub_ = create_subscription<VehicleStatus>(
         "/fmu/out/vehicle_status", qos,
         std::bind(&PX4MPCNode::vehicleStatusCallback, this, std::placeholders::_1));
+#if CDDP_MPC_HAS_VEHICLE_ANGULAR_VELOCITY
+    angular_velocity_sub_ = create_subscription<VehicleAngularVelocity>(
+        "/fmu/out/vehicle_angular_velocity", qos,
+        std::bind(&PX4MPCNode::angularVelocityCallback, this, std::placeholders::_1));
+#endif
 
     offboard_mode_pub_ = create_publisher<OffboardControlMode>(
         "/fmu/in/offboard_control_mode", qos);
@@ -261,14 +286,22 @@ public:
       RCLCPP_INFO(get_logger(),
                   "Mission start is gated. Call /cddp_mpc/start_mission to begin.");
     }
+    if (indi_use_rpm_feedback_) {
+      RCLCPP_WARN(get_logger(),
+                  "indi_use_rpm_feedback=true, but ESC RPM feedback is not wired in this "
+                  "node yet. Falling back to commanded torque estimation.");
+    }
   }
 
 private:
   void loadParameters() {
-    control_rate_hz_ = declareOrGet("control_rate_hz", 50.0);
-    solve_rate_hz_ = declareOrGet("solve_rate_hz", 10.0);
-    mpc_dt_ = declareOrGet("mpc_dt", 0.1);
+    control_rate_hz_ = declareOrGet("control_rate_hz", 100.0);
+    solve_rate_hz_ = declareOrGet("solve_rate_hz", 20.0);
+    mpc_dt_ = declareOrGet("mpc_dt", 0.05);
     horizon_steps_ = declareOrGet("horizon_steps", 20);
+    stale_plan_timeout_s_ = declareOrGet("stale_plan_timeout_s", 0.25);
+    solve_overrun_hover_cycles_threshold_ =
+        declareOrGet("solve_overrun_hover_cycles_threshold", 3);
 
     takeoff_altitude_m_ = declareOrGet("takeoff_altitude_m", -3.0);
     hover_duration_s_ = declareOrGet("hover_duration_s", 20.0);
@@ -340,6 +373,22 @@ private:
         declareOrGet("reference_max_climb_accel_mps2", 1.5);
     reference_smoothing_tau_s_ =
         declareOrGet("reference_smoothing_tau_s", 0.6);
+    reference_mode_ = declareOrGet("reference_mode", std::string("active_setpoint"));
+    reference_topic_ = declareOrGet("reference_topic", std::string(""));
+    reference_max_yaw_rate_rad_s_ =
+        declareOrGet("reference_max_yaw_rate_rad_s", 0.6);
+    reference_trajectory_period_s_ =
+        declareOrGet("reference_trajectory_period_s", 8.0);
+    reference_circle_radius_m_ =
+        declareOrGet("reference_circle_radius_m", 0.5);
+    reference_figure_eight_amplitude_m_ =
+        declareOrGet("reference_figure_eight_amplitude_m", 0.5);
+    reference_vertical_amplitude_m_ =
+        declareOrGet("reference_vertical_amplitude_m", 0.0);
+    reference_allow_jump_ = declareOrGet("reference_allow_jump", false);
+    target_x_m_ = declareOrGet("target_x_m", 0.0);
+    target_y_m_ = declareOrGet("target_y_m", 0.0);
+    target_z_m_ = declareOrGet("target_z_m", -3.0);
     odom_frame_config_.quaternion_order =
         declareOrGet("odom_quaternion_order", std::string("auto"));
     odom_frame_config_.odom_body_frame =
@@ -353,16 +402,16 @@ private:
     odom_frame_config_.expected_velocity_frame_ned =
         declareOrGet("expected_velocity_frame_ned", 1);
 
-    pos_weight_ = declareOrGet("pos_weight", 1.5);
-    vel_weight_ = declareOrGet("vel_weight", 4.0);
-    yaw_weight_ = declareOrGet("yaw_weight", 0.7);
-    tilt_weight_ = declareOrGet("tilt_weight", 4.0);
-    thrust_weight_ = declareOrGet("thrust_weight", 0.05);
-    rate_weight_ = declareOrGet("rate_weight", 0.05);
-    terminal_pos_weight_ = declareOrGet("terminal_pos_weight", 8.0);
+    pos_weight_ = declareOrGet("pos_weight", 2.0);
+    vel_weight_ = declareOrGet("vel_weight", 5.0);
+    yaw_weight_ = declareOrGet("yaw_weight", 0.8);
+    tilt_weight_ = declareOrGet("tilt_weight", 5.0);
+    thrust_weight_ = declareOrGet("thrust_weight", 0.08);
+    rate_weight_ = declareOrGet("rate_weight", 0.08);
+    terminal_pos_weight_ = declareOrGet("terminal_pos_weight", 6.0);
     terminal_vel_weight_ = declareOrGet("terminal_vel_weight", 4.0);
-    terminal_yaw_weight_ = declareOrGet("terminal_yaw_weight", 3.0);
-    terminal_tilt_weight_ = declareOrGet("terminal_tilt_weight", 8.0);
+    terminal_yaw_weight_ = declareOrGet("terminal_yaw_weight", 2.5);
+    terminal_tilt_weight_ = declareOrGet("terminal_tilt_weight", 6.0);
 
     max_iterations_ = declareOrGet("max_iterations", 8);
     constraint_tolerance_ = declareOrGet("constraint_tolerance", 0.5);
@@ -375,10 +424,27 @@ private:
     hover_min_thrust_ratio_ = declareOrGet("hover_min_thrust_ratio", 1.0);
     landing_min_thrust_ratio_ = declareOrGet("landing_min_thrust_ratio", 0.3);
     thrust_slew_rate_n_per_s_ =
-        declareOrGet("thrust_slew_rate_n_per_s", 8.0);
+        declareOrGet("thrust_slew_rate_n_per_s", 6.0);
     body_torque_slew_nm_per_s_ =
-        declareOrGet("body_torque_slew_nm_per_s", 2.5);
+        declareOrGet("body_torque_slew_nm_per_s", 1.8);
+    command_validity_thrust_jump_n_ =
+        declareOrGet("command_validity_thrust_jump_n", 8.0);
+    command_validity_torque_jump_nm_ =
+        declareOrGet("command_validity_torque_jump_nm", 0.6);
     debug_logging_enabled_ = declareOrGet("debug_logging_enabled", true);
+    enable_rotational_indi_ = declareOrGet("enable_rotational_indi", false);
+    indi_blend_alpha_ = declareOrGet("indi_blend_alpha", 0.25);
+    indi_rate_lpf_cutoff_hz_ = declareOrGet("indi_rate_lpf_cutoff_hz", 35.0);
+    indi_accel_lpf_cutoff_hz_ = declareOrGet("indi_accel_lpf_cutoff_hz", 20.0);
+    indi_torque_correction_limit_nm_ =
+        declareOrGet("indi_torque_correction_limit_nm", 0.12);
+    indi_max_measurement_age_s_ =
+        declareOrGet("indi_max_measurement_age_s", 0.1);
+    indi_max_body_rate_rad_s_ =
+        declareOrGet("indi_max_body_rate_rad_s", 12.0);
+    indi_use_rpm_feedback_ = declareOrGet("indi_use_rpm_feedback", false);
+    indi_debug_logging_enabled_ =
+        declareOrGet("indi_debug_logging_enabled", false);
 
     if (hover_thrust_n_ <= 0.0) {
       hover_thrust_n_ = mass_kg_ * gravity_mps2_;
@@ -463,6 +529,8 @@ private:
     odometry_received_ = true;
     odom_frame_ok_ = odom.frame_ok;
     current_body_rates_ = odom.angular_velocity;
+    updateIndiMeasurement(msg->timestamp * 1e-6, current_body_rates_.value(),
+                          "vehicle_odometry");
 
     if (!odom.frame_ok) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
@@ -495,6 +563,17 @@ private:
     current_attitude_ned_ = cddp_mpc::normalizeQuaternionWxyz(q_ned_wxyz);
   }
 
+#if CDDP_MPC_HAS_VEHICLE_ANGULAR_VELOCITY
+  void angularVelocityCallback(const VehicleAngularVelocity::SharedPtr msg) {
+    const Eigen::Vector3d body_rates(static_cast<double>(msg->xyz[0]),
+                                     static_cast<double>(msg->xyz[1]),
+                                     static_cast<double>(msg->xyz[2]));
+    current_body_rates_ = body_rates;
+    updateIndiMeasurement(msg->timestamp * 1e-6, body_rates,
+                          "vehicle_angular_velocity");
+  }
+#endif
+
   void vehicleStatusCallback(const VehicleStatus::SharedPtr msg) {
     armed_ = msg->arming_state == VehicleStatus::ARMING_STATE_ARMED;
     offboard_enabled_ =
@@ -513,6 +592,9 @@ private:
 
   void controlLoop() {
     if (!stateAvailable()) {
+      if (armed_ || offboard_enabled_) {
+        publishFallbackForUnavailableState();
+      }
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
                            "Waiting for PX4 state topics...");
       return;
@@ -521,13 +603,29 @@ private:
     updateMode();
     pollSolveResult();
 
+    SafetyTrace trace{};
     Eigen::Vector4d command = selectCommandForPublish();
-    command = shapeCommand(command);
-    command = applyHoverVerticalCorrection(command);
-    command = applyHoverLateralCorrection(command);
-    command = clipCommand(command);
-    command = applySlewLimits(command);
-    command = applyFlightThrustFloor(command);
+    trace.fallback_active = last_command_source_ != "solver";
+    command = applySafetyLayer("shaping", command,
+                               [this](const Eigen::Vector4d &value) {
+                                 return shapeCommand(value);
+                               }, &trace);
+    command = applySafetyLayer("hover_vertical_correction", command,
+                               [this](const Eigen::Vector4d &value) {
+                                 return applyHoverVerticalCorrection(value);
+                               }, &trace);
+    command = applySafetyLayer("hover_lateral_correction", command,
+                               [this](const Eigen::Vector4d &value) {
+                                 return applyHoverLateralCorrection(value);
+                               }, &trace);
+    last_nominal_command_ = command;
+    command = applySafetyLayer("rotational_indi", command,
+                               [this](const Eigen::Vector4d &value) {
+                                 return applyRotationalIndi(value);
+                               }, &trace);
+    last_corrected_command_ = command;
+    command = enforceFinalSafetyGate(command, &trace);
+    last_safety_trace_ = trace;
     last_published_command_ = command;
     publishVehicleThrustTorqueSetpoint(command);
     publishStatusDiagnostics();
@@ -565,9 +663,11 @@ private:
       return;
     }
 
-    const Eigen::VectorXd initial_state = buildCurrentStateErrorEnu();
+    const Eigen::Vector3d reference_target_enu = currentReferenceTargetEnu();
+    const Eigen::VectorXd initial_state =
+        buildCurrentStateErrorEnu(reference_target_enu);
     const ReferenceTrajectory reference_trajectory =
-        buildReferenceTrajectory(initial_state, *setpoint_enu_);
+        buildReferenceTrajectory(initial_state);
     if (!reference_trajectory.controls.empty() &&
         reference_trajectory.controls.front().size() >= 1) {
       latest_reference_thrust_n_ = reference_trajectory.controls.front()(0);
@@ -590,10 +690,11 @@ private:
         false,
         std::async(std::launch::async,
                    [this, request_id, initial_state, reference_trajectory,
-                    initial_state_guess, initial_control_guess, landing_mode]() {
+                    initial_state_guess, initial_control_guess, landing_mode,
+                    reference_target_enu]() {
                      return solveMPC(request_id, initial_state, reference_trajectory,
                                      initial_state_guess, initial_control_guess,
-                                     landing_mode);
+                                     reference_target_enu, landing_mode);
                    }),
     });
   }
@@ -721,13 +822,14 @@ private:
                        const ReferenceTrajectory &reference_trajectory,
                        const std::vector<Eigen::VectorXd> &initial_state_guess,
                        const std::vector<Eigen::VectorXd> &initial_control_guess,
+                       const Eigen::Vector3d &reference_target_enu,
                        bool landing_mode) {
     SolveResult result;
     result.request_id = request_id;
     result.command = hoverCommand(landing_mode ? landing_descent_rate_mps_ : 0.0);
 
     try {
-      auto solver = createSolver(reference_trajectory, *setpoint_enu_);
+      auto solver = createSolver(reference_trajectory, reference_target_enu);
       solver->setInitialState(initial_state);
       solver->setReferenceState(reference_trajectory.states.back());
       solver->setReferenceStates(reference_trajectory.states);
@@ -873,12 +975,13 @@ private:
     return solver;
   }
 
-  Eigen::VectorXd buildCurrentStateErrorEnu() const {
+  Eigen::VectorXd
+  buildCurrentStateErrorEnu(const Eigen::Vector3d &reference_target_enu) const {
     const Eigen::Vector3d position_enu = cddp_mpc::nedToEnu(*current_position_ned_);
     const Eigen::Vector3d velocity_enu = cddp_mpc::nedToEnu(*current_velocity_ned_);
     const Eigen::Quaterniond attitude_enu =
         cddp_mpc::quatNedToEnuWxyz(*current_attitude_ned_);
-    const Eigen::Vector3d position_error_enu = position_enu - *setpoint_enu_;
+    const Eigen::Vector3d position_error_enu = position_enu - reference_target_enu;
 
     Eigen::VectorXd state(13);
     state.segment<3>(0) = position_error_enu;
@@ -887,101 +990,14 @@ private:
     state(5) = attitude_enu.y();
     state(6) = attitude_enu.z();
     state.segment<3>(7) = velocity_enu;
-    state.segment<3>(10) = current_body_rates_.has_value()
-                               ? cddp_mpc::bodyVectorFluToFrd(*current_body_rates_)
-                               : Eigen::Vector3d::Zero();
+    state.segment<3>(10) =
+        current_body_rates_.value_or(Eigen::Vector3d::Zero());
     return state;
   }
 
-  struct VerticalReferenceProfile {
-    std::vector<double> positions_enu_z;
-    std::vector<double> velocities_enu_z;
-    std::vector<double> thrusts_n;
-  };
-
-  VerticalReferenceProfile buildVerticalReferenceProfile(
-      double current_position_enu_z, double current_velocity_enu_z,
-      double target_position_enu_z) const {
-    VerticalReferenceProfile profile;
-    profile.positions_enu_z.reserve(static_cast<std::size_t>(horizon_steps_ + 1));
-    profile.velocities_enu_z.reserve(static_cast<std::size_t>(horizon_steps_ + 1));
-    profile.thrusts_n.reserve(static_cast<std::size_t>(horizon_steps_ + 1));
-
-    const double rate_limit = std::max(reference_max_climb_rate_mps_, 0.05);
-    const double accel_limit = std::max(reference_max_climb_accel_mps2_, 0.1);
-    const double dt = std::max(mpc_dt_, 1e-6);
-    const double tau = std::max(reference_smoothing_tau_s_, dt);
-
-    double position = current_position_enu_z;
-    double velocity = current_velocity_enu_z;
-    profile.positions_enu_z.push_back(position);
-    profile.velocities_enu_z.push_back(velocity);
-    profile.thrusts_n.push_back(hover_thrust_n_);
-
-    for (int i = 0; i < horizon_steps_; ++i) {
-      const double pos_error = target_position_enu_z - position;
-      const double desired_velocity = std::clamp(pos_error / tau, -rate_limit, rate_limit);
-      const double accel_command =
-          std::clamp((desired_velocity - velocity) / dt, -accel_limit, accel_limit);
-
-      double next_velocity = velocity + accel_command * dt;
-      double next_position = position + next_velocity * dt;
-
-      const bool crossed_target =
-          (target_position_enu_z - position) * (target_position_enu_z - next_position) <= 0.0;
-      const bool should_snap = crossed_target && (std::abs(pos_error) > 1e-9);
-      double applied_accel = accel_command;
-      if (should_snap) {
-        next_position = target_position_enu_z;
-        next_velocity = 0.0;
-        applied_accel = std::clamp((-velocity) / dt, -accel_limit, accel_limit);
-      }
-
-      const double thrust = std::clamp(
-          hover_thrust_n_ + mass_kg_ * applied_accel, min_thrust_n_, max_thrust_n_);
-      position = next_position;
-      velocity = next_velocity;
-      profile.positions_enu_z.push_back(position);
-      profile.velocities_enu_z.push_back(velocity);
-      profile.thrusts_n.push_back(thrust);
-    }
-
-    if (!profile.thrusts_n.empty()) {
-      profile.thrusts_n.back() = hover_thrust_n_;
-    }
-
-    return profile;
-  }
-
-  ReferenceTrajectory
-  buildReferenceTrajectory(const Eigen::VectorXd &initial_state,
-                           const Eigen::Vector3d &setpoint_enu) const {
-    (void)setpoint_enu;
-    ReferenceTrajectory trajectory;
-    trajectory.states.reserve(static_cast<std::size_t>(horizon_steps_ + 1));
-    trajectory.controls.reserve(static_cast<std::size_t>(horizon_steps_ + 1));
-    const Eigen::Quaterniond q_ref =
-        cddp_mpc::yawNedToQuaternionEnu(target_yaw_rad_);
-    const VerticalReferenceProfile vertical_profile = buildVerticalReferenceProfile(
-        initial_state(2), initial_state(9), 0.0);
-
-    for (int i = 0; i <= horizon_steps_; ++i) {
-      Eigen::VectorXd state = Eigen::VectorXd::Zero(13);
-      state(2) = vertical_profile.positions_enu_z[static_cast<std::size_t>(i)];
-      state(3) = q_ref.w();
-      state(4) = q_ref.x();
-      state(5) = q_ref.y();
-      state(6) = q_ref.z();
-      state(9) = vertical_profile.velocities_enu_z[static_cast<std::size_t>(i)];
-      trajectory.states.push_back(state);
-
-      Eigen::VectorXd control = Eigen::VectorXd::Zero(4);
-      const int control_index = std::min(i + 1, horizon_steps_);
-      control(0) = vertical_profile.thrusts_n[static_cast<std::size_t>(control_index)];
-      trajectory.controls.push_back(control);
-    }
-
-    return trajectory;
+  ReferenceTrajectory buildReferenceTrajectory(
+      const Eigen::VectorXd &initial_state) const {
+    return reference_provider_->build(initial_state);
   }
 
   std::vector<Eigen::VectorXd>
@@ -1095,6 +1111,9 @@ private:
     const cddp_mpc::CommandSource source = cddp_mpc::selectCommandSource(
         mode_, last_usable_solution_, solve_fail_streak_, fallback_hold_cycles_);
     last_command_source_ = cddp_mpc::commandSourceLabel(source);
+    last_plan_age_s_ = std::numeric_limits<double>::quiet_NaN();
+    stale_plan_rejected_this_cycle_ = false;
+    overrun_hover_active_ = false;
 
     if (source == cddp_mpc::CommandSource::ReadyWait) {
       return readyCommand();
@@ -1104,6 +1123,19 @@ private:
     }
     if (source == cddp_mpc::CommandSource::Solver) {
       const double elapsed = std::max(0.0, nowSeconds() - last_solve_wall_time_s_);
+      last_plan_age_s_ = elapsed;
+      if (consecutive_overrun_cycles_ >=
+          std::max(1, solve_overrun_hover_cycles_threshold_)) {
+        overrun_hover_active_ = true;
+        last_command_source_ = "solver_overrun_hover";
+        return hoverCommand(mode_ == "LAND" ? landing_descent_rate_mps_ : 0.0);
+      }
+      if (elapsed > stale_plan_timeout_s_) {
+        stale_plan_rejected_this_cycle_ = true;
+        ++stale_plan_reject_count_;
+        last_command_source_ = "stale_plan_hover";
+        return hoverCommand(mode_ == "LAND" ? landing_descent_rate_mps_ : 0.0);
+      }
       return interpolateSolverCommand(elapsed);
     }
     if (source == cddp_mpc::CommandSource::RecoveryHover ||
@@ -1147,8 +1179,9 @@ private:
 
   Eigen::Vector4d shapeCommand(const Eigen::Vector4d &command) const {
     double pos_err = 1.0;
-    if (current_position_ned_.has_value() && setpoint_enu_.has_value()) {
-      pos_err = (*setpoint_enu_ - cddp_mpc::nedToEnu(*current_position_ned_)).norm();
+    if (current_position_ned_.has_value()) {
+      pos_err =
+          (currentReferenceTargetEnu() - cddp_mpc::nedToEnu(*current_position_ned_)).norm();
     }
     return cddp_mpc::shapeSolverThrustCommand(
         command, last_published_command_,
@@ -1168,16 +1201,16 @@ private:
   }
 
   Eigen::Vector4d applyHoverVerticalCorrection(const Eigen::Vector4d &command) const {
-    if (!current_position_ned_.has_value() || !current_velocity_ned_.has_value() ||
-        !setpoint_enu_.has_value()) {
+    if (!current_position_ned_.has_value() || !current_velocity_ned_.has_value()) {
       return command;
     }
 
+    const Eigen::Vector3d reference_target_enu = currentReferenceTargetEnu();
     const Eigen::Vector3d current_position_enu =
         cddp_mpc::nedToEnu(*current_position_ned_);
     const Eigen::Vector3d current_velocity_enu =
         cddp_mpc::nedToEnu(*current_velocity_ned_);
-    const double position_error_enu_z = (*setpoint_enu_)(2) - current_position_enu.z();
+    const double position_error_enu_z = reference_target_enu(2) - current_position_enu.z();
     const double velocity_enu_z = current_velocity_enu.z();
 
     return cddp_mpc::applyHoverVerticalCorrection(
@@ -1188,29 +1221,216 @@ private:
 
   Eigen::Vector4d applyHoverLateralCorrection(const Eigen::Vector4d &command) const {
     if (!current_position_ned_.has_value() || !current_velocity_ned_.has_value() ||
-        !current_attitude_ned_.has_value() || !setpoint_enu_.has_value()) {
+        !current_attitude_ned_.has_value()) {
       return command;
     }
 
+    const Eigen::Vector3d reference_target_enu = currentReferenceTargetEnu();
     const Eigen::Vector3d current_position_enu =
         cddp_mpc::nedToEnu(*current_position_ned_);
     const Eigen::Vector3d current_velocity_enu =
         cddp_mpc::nedToEnu(*current_velocity_ned_);
-    const Eigen::Vector3d position_error_enu = *setpoint_enu_ - current_position_enu;
+    const Eigen::Vector3d position_error_enu = reference_target_enu - current_position_enu;
     const Eigen::Quaterniond attitude_enu =
         cddp_mpc::quatNedToEnuWxyz(*current_attitude_ned_);
     const Eigen::Matrix3d world_to_body = attitude_enu.toRotationMatrix().transpose();
     const Eigen::Vector3d body_error = world_to_body * position_error_enu;
     const Eigen::Vector3d body_velocity = world_to_body * current_velocity_enu;
 
+    // body_error.y() is body-LEFT in FLU; negate for body-RIGHT expected
+    // by applyHoverLateralTorqueCorrection so the roll correction sign is
+    // correct (positive body_right_error → tilt right → move right).
     return cddp_mpc::applyHoverLateralTorqueCorrection(
-        command, mode_, body_error.x(), body_error.y(), body_velocity.x(),
-        body_velocity.y(), hover_lateral_kp_nm_per_m_,
+        command, mode_, body_error.x(), -body_error.y(), body_velocity.x(),
+        -body_velocity.y(), hover_lateral_kp_nm_per_m_,
         hover_lateral_kd_nm_per_mps_,
         Eigen::Vector3d(hover_lateral_correction_limit_nm_,
                         hover_lateral_correction_limit_nm_,
                         hover_lateral_correction_limit_nm_),
         maxBodyTorqueVector());
+  }
+
+  cddp_mpc::ReferenceConfig buildReferenceConfig() const {
+    cddp_mpc::ReferenceConfig config;
+    config.horizon_steps = horizon_steps_;
+    config.mpc_dt = mpc_dt_;
+    config.hover_thrust_n = hover_thrust_n_;
+    config.min_thrust_n = min_thrust_n_;
+    config.max_thrust_n = max_thrust_n_;
+    config.max_axis_speed_mps = reference_max_climb_rate_mps_;
+    config.max_axis_accel_mps2 = reference_max_climb_accel_mps2_;
+    config.max_yaw_rate_rad_s = reference_max_yaw_rate_rad_s_;
+    config.smoothing_tau_s = reference_smoothing_tau_s_;
+    config.target_yaw_rad = target_yaw_rad_;
+    config.trajectory_period_s = reference_trajectory_period_s_;
+    config.circle_radius_m = reference_circle_radius_m_;
+    config.figure_eight_amplitude_m = reference_figure_eight_amplitude_m_;
+    config.vertical_amplitude_m = reference_vertical_amplitude_m_;
+    config.allow_reference_jump = reference_allow_jump_;
+    config.mode = reference_mode_;
+    return config;
+  }
+
+  cddp_mpc::IndiRotationalCompensator::Config buildIndiConfig() const {
+    cddp_mpc::IndiRotationalCompensator::Config config;
+    config.enabled = enable_rotational_indi_;
+    config.blend_alpha = indi_blend_alpha_;
+    config.rate_lpf_cutoff_hz = indi_rate_lpf_cutoff_hz_;
+    config.accel_lpf_cutoff_hz = indi_accel_lpf_cutoff_hz_;
+    config.torque_correction_limit_nm = indi_torque_correction_limit_nm_;
+    config.use_rpm_feedback = indi_use_rpm_feedback_;
+    config.debug_logging_enabled = indi_debug_logging_enabled_;
+    return config;
+  }
+
+  Eigen::Vector3d currentReferenceTargetEnu() const {
+    if ((mode_ == "TAKEOFF" || mode_ == "HOVER" || mode_ == "LAND") &&
+        setpoint_enu_.has_value()) {
+      return *setpoint_enu_;
+    }
+    if (reference_mode_ == "configured_target") {
+      return Eigen::Vector3d(target_x_m_, target_y_m_, target_z_m_);
+    }
+    if (setpoint_enu_.has_value()) {
+      return *setpoint_enu_;
+    }
+    return Eigen::Vector3d(target_x_m_, target_y_m_, target_z_m_);
+  }
+
+  void updateIndiMeasurement(double timestamp_s, const Eigen::Vector3d &body_rates,
+                             const char *source_label) {
+    if (!rotational_indi_ || !body_rates.allFinite()) {
+      return;
+    }
+    rotational_indi_->updateMeasurement(timestamp_s, body_rates);
+    latest_rate_measurement_source_ = source_label;
+  }
+
+  Eigen::Vector4d applyRotationalIndi(const Eigen::Vector4d &command) {
+    if (!rotational_indi_) {
+      return command;
+    }
+
+    rotational_indi_->setConfig(buildIndiConfig());
+    if (!enable_rotational_indi_) {
+      last_indi_correction_.setZero();
+      last_indi_disable_reason_ = "disabled_by_param";
+      return command;
+    }
+
+    const auto &indi_status = rotational_indi_->status();
+    if (!indi_status.has_measurement) {
+      last_indi_correction_.setZero();
+      last_indi_disable_reason_ = "no_measurement";
+      return command;
+    }
+    if (!std::isfinite(indi_status.measurement_age_s) ||
+        indi_status.measurement_age_s > indi_max_measurement_age_s_) {
+      last_indi_correction_.setZero();
+      last_indi_disable_reason_ = "stale_measurement";
+      return command;
+    }
+    if (!indi_status.filtered_rates.allFinite() ||
+        indi_status.filtered_rates.cwiseAbs().maxCoeff() > indi_max_body_rate_rad_s_) {
+      last_indi_correction_.setZero();
+      last_indi_disable_reason_ = "rate_guard";
+      return command;
+    }
+
+    const Eigen::Vector3d body_rates =
+        current_body_rates_.value_or(Eigen::Vector3d::Zero());
+    const Eigen::Vector3d corrected_torque = rotational_indi_->computeTorqueCommand(
+        nowSeconds(), command.tail<3>(), body_rates, last_published_command_.tail<3>());
+    if (!corrected_torque.allFinite()) {
+      last_indi_correction_.setZero();
+      last_indi_disable_reason_ = "nonfinite_output";
+      return command;
+    }
+
+    Eigen::Vector4d corrected_command = command;
+    corrected_command.tail<3>() = corrected_torque;
+    last_indi_correction_ = corrected_torque - command.tail<3>();
+    last_indi_disable_reason_ = "active";
+    return corrected_command;
+  }
+
+  Eigen::Vector4d safeFallbackCommand() const {
+    if (mode_ == "READY" || !(armed_ || offboard_enabled_)) {
+      return readyCommand();
+    }
+    return hoverCommand(mode_ == "LAND" ? landing_descent_rate_mps_ : 0.0);
+  }
+
+  bool isCommandFinite(const Eigen::Vector4d &command) const {
+    return command.allFinite();
+  }
+
+  bool hasExcessiveCommandJump(const Eigen::Vector4d &command) const {
+    const Eigen::Vector4d delta = (command - last_published_command_).cwiseAbs();
+    return delta(0) > std::max(0.0, command_validity_thrust_jump_n_) ||
+           delta.tail<3>().maxCoeff() >
+               std::max(0.0, command_validity_torque_jump_nm_);
+  }
+
+  Eigen::Vector4d enforceFinalSafetyGate(const Eigen::Vector4d &command,
+                                         SafetyTrace *trace) {
+    Eigen::Vector4d gated = command;
+    if (!isCommandFinite(gated)) {
+      ++command_validity_failure_count_;
+      last_command_validity_status_ = "nonfinite";
+      gated = safeFallbackCommand();
+      if (trace != nullptr) {
+        trace->last_modified_layer = "command_validity_nonfinite";
+      }
+    } else if (hasExcessiveCommandJump(gated)) {
+      ++command_validity_failure_count_;
+      last_command_validity_status_ = "jump_rejected";
+      gated = safeFallbackCommand();
+      if (trace != nullptr) {
+        trace->last_modified_layer = "command_validity_jump";
+      }
+    } else {
+      last_command_validity_status_ = "ok";
+    }
+
+    gated = applySafetyLayer("clip_and_project", gated,
+                             [this, trace](const Eigen::Vector4d &value) {
+                               const Eigen::Vector4d clipped = clipCommand(value);
+                               if (trace != nullptr &&
+                                   (clipped - value).cwiseAbs().maxCoeff() > 1e-9) {
+                                 const Eigen::Vector4d direct_clip =
+                                     clipCommandWithoutProjection(value);
+                                 trace->projection_changed_command =
+                                     (clipped - direct_clip).cwiseAbs().maxCoeff() > 1e-9;
+                               }
+                               return clipped;
+                             }, trace);
+    gated = applySafetyLayer("slew_limit", gated,
+                             [this](const Eigen::Vector4d &value) {
+                               return applySlewLimits(value);
+                             }, trace);
+    gated = applySafetyLayer("thrust_floor", gated,
+                             [this](const Eigen::Vector4d &value) {
+                               return applyFlightThrustFloor(value);
+                             }, trace);
+    return gated;
+  }
+
+  void publishFallbackForUnavailableState() {
+    SafetyTrace trace{};
+    trace.fallback_active = true;
+    Eigen::Vector4d command = safeFallbackCommand();
+    command = enforceFinalSafetyGate(command, &trace);
+    if (trace.last_modified_layer == "none") {
+      trace.last_modified_layer = "state_unavailable_fallback";
+    }
+    last_nominal_command_ = command;
+    last_corrected_command_ = command;
+    last_safety_trace_ = trace;
+    last_published_command_ = command;
+    last_command_source_ = "state_unavailable_fallback";
+    publishVehicleThrustTorqueSetpoint(command);
+    publishStatusDiagnostics();
   }
 
   Eigen::Vector4d applySlewLimits(const Eigen::Vector4d &command) const {
@@ -1228,7 +1448,19 @@ private:
     return limited;
   }
 
-  Eigen::Vector4d clipCommand(const Eigen::Vector4d &command) const {
+  template <typename LayerFn>
+  Eigen::Vector4d applySafetyLayer(const std::string &layer_name,
+                                   const Eigen::Vector4d &command,
+                                   LayerFn &&layer_fn, SafetyTrace *trace) const {
+    const Eigen::Vector4d updated = layer_fn(command);
+    if (trace != nullptr &&
+        (updated - command).cwiseAbs().maxCoeff() > 1e-9) {
+      trace->last_modified_layer = layer_name;
+    }
+    return updated;
+  }
+
+  Eigen::Vector4d clipCommandWithoutProjection(const Eigen::Vector4d &command) const {
     Eigen::Vector4d clipped = command;
     const double min_collective_thrust_n =
         std::max(min_thrust_n_, 4.0 * min_motor_thrust_n_);
@@ -1241,12 +1473,18 @@ private:
     clipped(1) = std::clamp(clipped(1), -max_torque.x(), max_torque.x());
     clipped(2) = std::clamp(clipped(2), -max_torque.y(), max_torque.y());
     clipped(3) = std::clamp(clipped(3), -max_torque.z(), max_torque.z());
+    return clipped;
+  }
+
+  Eigen::Vector4d clipCommand(const Eigen::Vector4d &command) const {
+    const Eigen::Vector4d clipped = clipCommandWithoutProjection(command);
     return cddp_mpc::projectThrustTorqueToMotorLimits(
         clipped, min_motor_thrust_n_, max_motor_thrust_n_, arm_length_m_,
         yaw_moment_coefficient_);
   }
 
   void pollSolveResult() {
+    bool has_overrun_pending = false;
     auto it = pending_solves_.begin();
     while (it != pending_solves_.end()) {
       if (it->future.wait_for(0ms) != std::future_status::ready) {
@@ -1254,8 +1492,10 @@ private:
         if (age_ms > solve_timeout_ms_ && !it->timeout_reported) {
           it->timeout_reported = true;
           ++solve_timeout_count_;
+          has_overrun_pending = true;
         } else if (age_ms > solve_timeout_ms_) {
           ++solve_overrun_count_;
+          has_overrun_pending = true;
         }
         ++it;
         continue;
@@ -1277,6 +1517,7 @@ private:
           last_good_command_ = result.command;
           last_solve_wall_time_s_ = it->start_time_s;
           solve_fail_streak_ = 0;
+          consecutive_overrun_cycles_ = 0;
           last_planned_control_trajectory_ = result.control_trajectory;
           std::lock_guard<std::mutex> lock(warm_start_mutex_);
           previous_state_guess_ = shiftStateTrajectory(result.state_trajectory);
@@ -1289,6 +1530,11 @@ private:
         }
       }
       it = pending_solves_.erase(it);
+    }
+    if (has_overrun_pending) {
+      ++consecutive_overrun_cycles_;
+    } else {
+      consecutive_overrun_cycles_ = 0;
     }
   }
 
@@ -1358,7 +1604,8 @@ private:
 
   bool stateAvailable() const {
     return current_position_ned_.has_value() && current_velocity_ned_.has_value() &&
-           current_attitude_ned_.has_value() && setpoint_enu_.has_value();
+           current_attitude_ned_.has_value() &&
+           (setpoint_enu_.has_value() || reference_mode_ == "configured_target");
   }
 
   void setTakeoffSetpoint() {
@@ -1385,10 +1632,7 @@ private:
   }
 
   double activeTargetZNed() const {
-    if (!setpoint_enu_.has_value()) {
-      return takeoff_altitude_m_;
-    }
-    return -(*setpoint_enu_)(2);
+    return -currentReferenceTargetEnu()(2);
   }
 
   Eigen::Matrix3d inertiaMatrix() const {
@@ -1464,9 +1708,10 @@ private:
     RCLCPP_INFO_THROTTLE(
         get_logger(), *get_clock(), 1000,
         "mode=%s state=%s armed=%d offboard=%d z_ned=%.2f target_z_ned=%.2f "
-        "rate_norm=%.2f source=%s u=[%.2f, %.2f, %.2f, %.2f] solve_ms=%.1f status=%s",
+        "rate_norm=%.2f source=%s indi=%d u=[%.2f, %.2f, %.2f, %.2f] solve_ms=%.1f status=%s",
         mode_.c_str(), stateSourceLabel(), armed_, offboard_enabled_, current_z_ned,
-        activeTargetZNed(), rate_norm, last_command_source_.c_str(), command(0),
+        activeTargetZNed(), rate_norm, last_command_source_.c_str(),
+        enable_rotational_indi_ ? 1 : 0, command(0),
         command(1),
         command(2), command(3),
         last_solve_time_ms_, last_status_message_.c_str());
@@ -1501,11 +1746,16 @@ private:
     const double solver_cmd_thrust = last_solver_command_(0);
     const double published_cmd_thrust = last_published_command_(0);
     const Eigen::Vector3d solver_cmd_torque = last_solver_command_.tail<3>();
+    const Eigen::Vector3d nominal_cmd_torque = last_nominal_command_.tail<3>();
+    const Eigen::Vector3d corrected_cmd_torque = last_corrected_command_.tail<3>();
     const Eigen::Vector3d published_cmd_torque = last_published_command_.tail<3>();
+    const cddp_mpc::IndiRotationalCompensator::Status *indi_status =
+        rotational_indi_ ? &rotational_indi_->status() : &default_indi_status_;
     Eigen::Vector3d position_error_enu =
         Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
-    if (current_position_ned_.has_value() && setpoint_enu_.has_value()) {
-      position_error_enu = *setpoint_enu_ - cddp_mpc::nedToEnu(*current_position_ned_);
+    if (current_position_ned_.has_value()) {
+      position_error_enu =
+          currentReferenceTargetEnu() - cddp_mpc::nedToEnu(*current_position_ned_);
     }
 
     auto push = [&values](const std::string &key, const std::string &value) {
@@ -1523,6 +1773,13 @@ private:
     push("solve_count", std::to_string(solve_count_));
     push("solve_timeout_count", std::to_string(solve_timeout_count_));
     push("solve_overrun_count", std::to_string(solve_overrun_count_));
+    push("consecutive_overrun_cycles", std::to_string(consecutive_overrun_cycles_));
+    push("plan_age_s", formatDouble(last_plan_age_s_));
+    push("stale_plan_timeout_s", formatDouble(stale_plan_timeout_s_));
+    push("stale_plan_reject_count", std::to_string(stale_plan_reject_count_));
+    push("stale_plan_rejected_this_cycle",
+         stale_plan_rejected_this_cycle_ ? "true" : "false");
+    push("overrun_hover_active", overrun_hover_active_ ? "true" : "false");
     push("max_constraint_violation", formatDouble(last_max_constraint_violation_));
     push("raw_bound_violation", formatDouble(last_raw_bound_violation_));
     push("current_z_ned_m", formatDouble(current_z_ned));
@@ -1553,6 +1810,13 @@ private:
     push("hover_lateral_correction_limit_nm",
          formatDouble(hover_lateral_correction_limit_nm_));
     push("hover_torque_limit_nm", formatDouble(hover_torque_limit_nm_));
+    push("command_validity_status", last_command_validity_status_);
+    push("command_validity_failure_count",
+         std::to_string(command_validity_failure_count_));
+    push("command_validity_thrust_jump_n",
+         formatDouble(command_validity_thrust_jump_n_));
+    push("command_validity_torque_jump_nm",
+         formatDouble(command_validity_torque_jump_nm_));
     push("arm_length_m", formatDouble(arm_length_m_));
     push("yaw_moment_coefficient", formatDouble(yaw_moment_coefficient_));
     push("min_motor_thrust_n", formatDouble(min_motor_thrust_n_));
@@ -1561,6 +1825,12 @@ private:
     push("max_pitch_torque_nm", formatDouble(max_pitch_torque_nm_));
     push("max_yaw_torque_nm", formatDouble(max_yaw_torque_nm_));
     push("command_source", last_command_source_);
+    push("fallback_active", last_safety_trace_.fallback_active ? "true" : "false");
+    push("last_modified_safety_layer", last_safety_trace_.last_modified_layer);
+    push("projection_changed_command",
+         last_safety_trace_.projection_changed_command ? "true" : "false");
+    push("safety_pipeline_order",
+         "nominal->shaping->hover_vertical_correction->hover_lateral_correction->rotational_indi->clip_and_project->slew_limit->thrust_floor->publish");
     push("state_source", stateSourceLabel());
     push("odom_frame_ok", odom_frame_ok_ ? "true" : "false");
     push("position_error_enu_x_m", formatDouble(position_error_enu.x()));
@@ -1574,16 +1844,49 @@ private:
     push("solver_cmd_tau_x_nm", formatDouble(solver_cmd_torque.x()));
     push("solver_cmd_tau_y_nm", formatDouble(solver_cmd_torque.y()));
     push("solver_cmd_tau_z_nm", formatDouble(solver_cmd_torque.z()));
+    push("nominal_cmd_tau_x_nm", formatDouble(nominal_cmd_torque.x()));
+    push("nominal_cmd_tau_y_nm", formatDouble(nominal_cmd_torque.y()));
+    push("nominal_cmd_tau_z_nm", formatDouble(nominal_cmd_torque.z()));
+    push("corrected_cmd_tau_x_nm", formatDouble(corrected_cmd_torque.x()));
+    push("corrected_cmd_tau_y_nm", formatDouble(corrected_cmd_torque.y()));
+    push("corrected_cmd_tau_z_nm", formatDouble(corrected_cmd_torque.z()));
     push("published_cmd_tau_x_nm", formatDouble(published_cmd_torque.x()));
     push("published_cmd_tau_y_nm", formatDouble(published_cmd_torque.y()));
     push("published_cmd_tau_z_nm", formatDouble(published_cmd_torque.z()));
+    push("enable_rotational_indi", enable_rotational_indi_ ? "true" : "false");
+    push("indi_active", indi_status->active ? "true" : "false");
+    push("indi_disable_reason", last_indi_disable_reason_);
+    push("indi_measurement_source", latest_rate_measurement_source_);
+    push("indi_using_rpm_feedback",
+         indi_status->using_rpm_feedback ? "true" : "false");
+    push("indi_using_command_feedback_fallback",
+         indi_status->using_command_feedback_fallback ? "true" : "false");
+    push("indi_measurement_age_s", formatDouble(indi_status->measurement_age_s));
+    push("indi_update_rate_hz", formatDouble(indi_status->update_rate_hz));
+    push("indi_filtered_rate_x_rad_s", formatDouble(indi_status->filtered_rates.x()));
+    push("indi_filtered_rate_y_rad_s", formatDouble(indi_status->filtered_rates.y()));
+    push("indi_filtered_rate_z_rad_s", formatDouble(indi_status->filtered_rates.z()));
+    push("indi_filtered_accel_x_rad_s2",
+         formatDouble(indi_status->filtered_accel.x()));
+    push("indi_filtered_accel_y_rad_s2",
+         formatDouble(indi_status->filtered_accel.y()));
+    push("indi_filtered_accel_z_rad_s2",
+         formatDouble(indi_status->filtered_accel.z()));
+    push("indi_torque_correction_x_nm",
+         formatDouble(indi_status->torque_correction.x()));
+    push("indi_torque_correction_y_nm",
+         formatDouble(indi_status->torque_correction.y()));
+    push("indi_torque_correction_z_nm",
+         formatDouble(indi_status->torque_correction.z()));
     return values;
   }
 
-  double control_rate_hz_{50.0};
-  double solve_rate_hz_{10.0};
-  double mpc_dt_{0.1};
+  double control_rate_hz_{100.0};
+  double solve_rate_hz_{20.0};
+  double mpc_dt_{0.05};
   int horizon_steps_{20};
+  double stale_plan_timeout_s_{0.25};
+  int solve_overrun_hover_cycles_threshold_{3};
 
   double takeoff_altitude_m_{-3.0};
   double hover_duration_s_{20.0};
@@ -1649,7 +1952,18 @@ private:
   double terminal_tilt_weight_{8.0};
   double reference_max_climb_rate_mps_{1.0};
   double reference_max_climb_accel_mps2_{1.5};
+  double reference_max_yaw_rate_rad_s_{0.6};
   double reference_smoothing_tau_s_{0.6};
+  double reference_trajectory_period_s_{8.0};
+  double reference_circle_radius_m_{0.5};
+  double reference_figure_eight_amplitude_m_{0.5};
+  double reference_vertical_amplitude_m_{0.0};
+  bool reference_allow_jump_{false};
+  std::string reference_mode_{"active_setpoint"};
+  std::string reference_topic_{""};
+  double target_x_m_{0.0};
+  double target_y_m_{0.0};
+  double target_z_m_{-3.0};
 
   int max_iterations_{8};
   double constraint_tolerance_{0.5};
@@ -1660,13 +1974,25 @@ private:
   double landing_min_thrust_ratio_{0.3};
   double thrust_slew_rate_n_per_s_{8.0};
   double body_torque_slew_nm_per_s_{2.5};
+  double command_validity_thrust_jump_n_{8.0};
+  double command_validity_torque_jump_nm_{0.6};
   bool debug_logging_enabled_{true};
+  bool enable_rotational_indi_{false};
+  double indi_blend_alpha_{0.25};
+  double indi_rate_lpf_cutoff_hz_{35.0};
+  double indi_accel_lpf_cutoff_hz_{20.0};
+  double indi_torque_correction_limit_nm_{0.12};
+  double indi_max_measurement_age_s_{0.1};
+  double indi_max_body_rate_rad_s_{12.0};
+  bool indi_use_rpm_feedback_{false};
+  bool indi_debug_logging_enabled_{false};
   std::size_t max_pending_solve_requests_{2};
   cddp_mpc::FrameAdapterConfig odom_frame_config_{};
 
   std::optional<Eigen::Vector3d> current_position_ned_;
   std::optional<Eigen::Vector3d> current_velocity_ned_;
   std::optional<Eigen::Quaterniond> current_attitude_ned_;
+  // Stored as normalized FRD body rates once the PX4 message is adapted.
   std::optional<Eigen::Vector3d> current_body_rates_;
   std::optional<Eigen::Vector3d> setpoint_enu_;
   std::optional<double> home_z_ned_;
@@ -1689,7 +2015,13 @@ private:
   Eigen::Vector4d last_command_{Eigen::Vector4d::Zero()};
   Eigen::Vector4d last_good_command_{Eigen::Vector4d::Zero()};
   Eigen::Vector4d last_published_command_{Eigen::Vector4d::Zero()};
+  Eigen::Vector4d last_nominal_command_{Eigen::Vector4d::Zero()};
+  Eigen::Vector4d last_corrected_command_{Eigen::Vector4d::Zero()};
+  Eigen::Vector3d last_indi_correction_{Eigen::Vector3d::Zero()};
+  std::string last_indi_disable_reason_{"disabled_by_param"};
   std::string last_command_source_{"solver"};
+  std::string last_command_validity_status_{"ok"};
+  SafetyTrace last_safety_trace_{};
   std::string last_status_message_{"not_started"};
   bool last_solve_success_{false};
   bool last_usable_solution_{false};
@@ -1701,6 +2033,12 @@ private:
   int solve_count_{0};
   int solve_timeout_count_{0};
   int solve_overrun_count_{0};
+  int stale_plan_reject_count_{0};
+  int command_validity_failure_count_{0};
+  int consecutive_overrun_cycles_{0};
+  double last_plan_age_s_{std::numeric_limits<double>::quiet_NaN()};
+  bool stale_plan_rejected_this_cycle_{false};
+  bool overrun_hover_active_{false};
   std::vector<Eigen::VectorXd> last_planned_control_trajectory_;
 
   std::optional<std::vector<Eigen::VectorXd>> previous_state_guess_;
@@ -1714,6 +2052,9 @@ private:
   rclcpp::Subscription<VehicleOdometry>::SharedPtr odometry_sub_;
   rclcpp::Subscription<VehicleAttitude>::SharedPtr attitude_sub_;
   rclcpp::Subscription<VehicleStatus>::SharedPtr vehicle_status_sub_;
+#if CDDP_MPC_HAS_VEHICLE_ANGULAR_VELOCITY
+  rclcpp::Subscription<VehicleAngularVelocity>::SharedPtr angular_velocity_sub_;
+#endif
 
   rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_mode_pub_;
   rclcpp::Publisher<VehicleThrustSetpoint>::SharedPtr vehicle_thrust_pub_;
@@ -1726,6 +2067,11 @@ private:
   rclcpp::TimerBase::SharedPtr control_timer_;
   rclcpp::TimerBase::SharedPtr solve_timer_;
   rclcpp::TimerBase::SharedPtr offboard_timer_;
+
+  std::unique_ptr<cddp_mpc::ReferenceProvider> reference_provider_;
+  std::unique_ptr<cddp_mpc::IndiRotationalCompensator> rotational_indi_;
+  cddp_mpc::IndiRotationalCompensator::Status default_indi_status_{};
+  std::string latest_rate_measurement_source_{"none"};
 };
 
 } // namespace

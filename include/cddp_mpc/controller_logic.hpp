@@ -275,7 +275,7 @@ inline Eigen::Vector4d shapeSolverThrustCommand(
       shaped(0) = std::max(shaped(0), min_hover_thrust);
     }
 
-    const double error_scale = std::clamp(position_error_norm / 1.0, 0.15, 1.0);
+    const double error_scale = std::clamp(position_error_norm / 1.0, 0.4, 1.0);
     const Eigen::Vector3d effective_limit =
         hover_torque_limit_nm.cwiseAbs().cwiseMin(max_body_torque_nm.cwiseAbs()) *
         error_scale;

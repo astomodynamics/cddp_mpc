@@ -41,6 +41,26 @@ TEST(Px4UtilsTest, ThrustCommandMapsToNegativeBodyZ) {
   EXPECT_FLOAT_EQ(thrust_body[2], -0.5F);
 }
 
+TEST(Px4UtilsTest, TorqueCommandUsesProvidedScalePerAxis) {
+  const Eigen::Vector3d torque_nm(0.2, -0.15, 0.08);
+  const Eigen::Vector3d scale(0.5, 2.0, 4.0);
+  const auto torque_body = cddp_mpc::torqueBodyFromCommand(torque_nm, scale);
+
+  EXPECT_FLOAT_EQ(torque_body[0], 0.1F);
+  EXPECT_FLOAT_EQ(torque_body[1], -0.3F);
+  EXPECT_FLOAT_EQ(torque_body[2], 0.32F);
+}
+
+TEST(Px4UtilsTest, TorqueCommandWithoutScaleFallsBackToZero) {
+  const Eigen::Vector3d torque_nm(0.2, -0.15, 0.08);
+  const auto torque_body =
+      cddp_mpc::torqueBodyFromCommand(torque_nm, Eigen::Vector3d::Zero());
+
+  EXPECT_FLOAT_EQ(torque_body[0], 0.0F);
+  EXPECT_FLOAT_EQ(torque_body[1], 0.0F);
+  EXPECT_FLOAT_EQ(torque_body[2], 0.0F);
+}
+
 TEST(Px4UtilsTest, NormalizeOdometryAutoDetectsXyzwQuaternionOrder) {
   cddp_mpc::FrameAdapterConfig config;
   config.quaternion_order = "auto";
@@ -73,6 +93,23 @@ TEST(Px4UtilsTest, NormalizeOdometryConvertsFluBodyRatesToFrd) {
   EXPECT_NEAR(odom.angular_velocity.x(), 0.1, 1e-9);
   EXPECT_NEAR(odom.angular_velocity.y(), -0.2, 1e-9);
   EXPECT_NEAR(odom.angular_velocity.z(), 0.3, 1e-9);
+}
+
+TEST(Px4UtilsTest, NormalizeOdometryLeavesFrdBodyRatesUnchanged) {
+  cddp_mpc::FrameAdapterConfig config;
+  config.quaternion_order = "xyzw";
+  config.odom_body_frame = "frd";
+
+  const Eigen::Vector3d body_rates_frd(0.1, -0.2, 0.3);
+  const cddp_mpc::NormalizedOdometry odom = cddp_mpc::normalizeOdometry(
+      Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), body_rates_frd,
+      Eigen::Vector4d(0.0, 0.0, 0.0, 1.0), 1, 1, config);
+
+  EXPECT_TRUE(odom.frame_ok);
+  EXPECT_EQ(odom.body_frame_used, "frd");
+  EXPECT_NEAR(odom.angular_velocity.x(), body_rates_frd.x(), 1e-9);
+  EXPECT_NEAR(odom.angular_velocity.y(), body_rates_frd.y(), 1e-9);
+  EXPECT_NEAR(odom.angular_velocity.z(), body_rates_frd.z(), 1e-9);
 }
 
 TEST(Px4UtilsTest, NormalizeOdometryRejectsUnexpectedFrameMetadata) {
