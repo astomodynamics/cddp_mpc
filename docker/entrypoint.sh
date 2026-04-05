@@ -71,19 +71,33 @@ _install_dev_shell_helpers() {
     rc_file="$HOME/.bashrc"
     local ws_root
     ws_root="$(_workspace_root)"
+    local marker_begin marker_end
+    marker_begin="# CDDP-MPC helper aliases"
+    marker_end="# End CDDP-MPC helper aliases"
 
     if [ -z "$repo_dir" ] || [ ! -f "$rc_file" ]; then
         return
     fi
-    if grep -q "CDDP-MPC helper aliases" "$rc_file"; then
-        return
+    if grep -q "$marker_begin" "$rc_file"; then
+        sed -i "/${marker_begin}/,/${marker_end}/d" "$rc_file"
     fi
 
     cat >> "$rc_file" <<EOF
 
 # CDDP-MPC helper aliases
 alias cw='cd ${repo_dir}'
-alias cb='cd ${ws_root} && colcon --log-base ${ws_root}/log build --packages-select cddp_mpc --packages-ignore px4_msgs --base-paths src/cddp_mpc src/px4_msgs --build-base ${ws_root}/build --install-base ${ws_root}/install --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF'
+cb() {
+    cd ${ws_root} && colcon --log-base ${ws_root}/log build --packages-select cddp_mpc --packages-ignore px4_msgs --base-paths src/cddp_mpc src/px4_msgs --build-base ${ws_root}/build --install-base ${ws_root}/install --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+}
+ct() {
+    local test_dir=${ws_root}/build/cddp_mpc
+    local test_regex='^(test_px4_utils|test_controller_logic|test_error_state_quadrotor_rate|test_error_state_quadrotor_thrust|test_reference_provider|test_indi_rotational_compensator|test_validate_takeoff_hover_py|test_calibrate_hover_mass_py|test_px4_data_collector_py|test_sitl_config_defaults_py)$'
+    if [ ! -d "\${test_dir}" ]; then
+        echo "Test directory not found: \${test_dir}"
+        return 1
+    fi
+    cd "\${test_dir}" && ctest --output-on-failure -R "\${test_regex}" "\$@"
+}
 sb() {
     source /opt/ros/\${ROS_DISTRO}/setup.bash
     if [ -f ${ws_root}/install/setup.bash ]; then
@@ -92,6 +106,7 @@ sb() {
         source /tmp/cddp_install/setup.bash
     fi
 }
+# End CDDP-MPC helper aliases
 EOF
 }
 

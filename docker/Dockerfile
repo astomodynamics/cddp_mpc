@@ -94,6 +94,13 @@ ARG USERNAME=developer
 ARG USER_UID=1000
 ARG USER_GID=1000
 
+RUN apt-get update && apt-get install -y \
+    libgtest-dev \
+    ros-${ROS_DISTRO}-ament-cmake-gtest \
+    ros-${ROS_DISTRO}-ament-lint-auto \
+    ros-${ROS_DISTRO}-ament-lint-common \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid ${USER_GID} ${USERNAME} && \
     useradd --uid ${USER_UID} --gid ${USER_GID} -m ${USERNAME} && \
     apt-get update && apt-get install -y sudo && \
@@ -113,7 +120,7 @@ WORKDIR /home/${USERNAME}/ws
 RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
     colcon build --packages-select px4_msgs cddp_mpc \
       --symlink-install \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USERNAME}/.bashrc && \
     echo "if [ -f /home/${USERNAME}/ws/install/setup.bash ]; then source /home/${USERNAME}/ws/install/setup.bash; fi" >> /home/${USERNAME}/.bashrc && \

@@ -103,7 +103,14 @@ Open the lighter simulation image:
 docker compose run --rm cddp-mpc-sim bash
 ```
 
-Inside either container, the ROS and PX4 environment is already sourced. In the dev container, `cw` jumps to the repo, `cb` rebuilds `cddp_mpc`, and `sb` sources the active overlay.
+Inside either container, the ROS and PX4 environment is already sourced. In the dev container, `cw` jumps to the repo, `cb` rebuilds `cddp_mpc` with `BUILD_TESTING=ON`, `ct` runs the package's targeted CTest cases from the active build tree, and `sb` sources the active overlay.
+
+Rebuild and run the package tests inside the dev container with:
+
+```bash
+cb
+ct
+```
 
 Important boundary:
 

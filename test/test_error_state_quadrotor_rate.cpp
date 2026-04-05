@@ -31,7 +31,7 @@ TEST(ErrorStateQuadrotorRateTest, HoverEquilibriumStaysNearZeroError) {
   EXPECT_NEAR(next_state.segment<4>(6).norm(), 1.0, 1e-9);
 }
 
-TEST(ErrorStateQuadrotorRateTest, ForwardPitchProducesForwardEnuAcceleration) {
+TEST(ErrorStateQuadrotorRateTest, ForwardPitchProducesNorthwardEnuAcceleration) {
   const double mass_kg = 1.35;
   const double gravity_mps2 = 9.81;
   const double hover_thrust_n = mass_kg * gravity_mps2;
@@ -40,8 +40,9 @@ TEST(ErrorStateQuadrotorRateTest, ForwardPitchProducesForwardEnuAcceleration) {
       0.1, mass_kg, 20.0, 0.8, Eigen::Vector3d::Zero(), "rk4");
 
   Eigen::VectorXd state = Eigen::VectorXd::Zero(10);
-  const Eigen::AngleAxisd pitch_enu(-0.15, Eigen::Vector3d::UnitY());
-  const Eigen::Quaterniond quat_enu(pitch_enu);
+  const Eigen::Quaterniond quat_ned(
+      Eigen::AngleAxisd(-0.15, Eigen::Vector3d::UnitY()));
+  const Eigen::Quaterniond quat_enu = cddp_mpc::quatNedToEnuWxyz(quat_ned);
   state(6) = quat_enu.w();
   state(7) = quat_enu.x();
   state(8) = quat_enu.y();
@@ -52,5 +53,5 @@ TEST(ErrorStateQuadrotorRateTest, ForwardPitchProducesForwardEnuAcceleration) {
 
   const Eigen::VectorXd state_dot = system.getContinuousDynamics(state, control, 0.0);
 
-  EXPECT_GT(state_dot(3), 0.0);
+  EXPECT_GT(state_dot(4), 0.0);
 }
