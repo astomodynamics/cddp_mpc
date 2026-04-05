@@ -1,0 +1,123 @@
+cddp_mpc:
+  ros__parameters:
+    control_rate_hz: 100.0
+    solve_rate_hz: 20.0
+    mpc_dt: 0.05
+    horizon_steps: 20
+    stale_plan_timeout_s: 0.25
+    solve_overrun_hover_cycles_threshold: 3
+
+    # Mission behavior
+    takeoff_altitude_m: -3.0
+    hover_duration_s: 20.0
+    settle_tolerance_m: 0.3
+    hover_entry_vz_threshold_mps: 0.35
+    hover_entry_rate_threshold_rad_s: 0.3
+    hover_entry_dwell_s: 0.6
+    hover_handoff_duration_s: 0.0
+    hover_reenter_error_m: 1.2
+    hover_reenter_dwell_s: 2.0
+    landing_enabled: true
+    landing_descent_rate_mps: 0.3
+    landing_touchdown_tolerance_m: 0.2
+    landing_touchdown_vz_threshold_mps: 0.2
+    ready_thrust_n: 0.0
+    fallback_hold_cycles: 5
+    fallback_descent_rate_mps: 0.2
+    solver_command_blend_alpha: 0.2
+    hover_vertical_kp_n_per_m: 0.0
+    hover_vertical_kd_n_per_mps: 0.0
+    hover_vertical_correction_limit_n: 0.0
+    hover_lateral_kp_nm_per_m: 0.0
+    hover_lateral_kd_nm_per_mps: 0.0
+    hover_lateral_correction_limit_nm: 0.0
+    hover_torque_limit_nm: 0.12
+
+    # Start gate for hardware validation
+    auto_start_sequence: false
+    auto_engage_offboard: true
+    auto_arm: true
+    use_odometry_state: true
+    max_pending_solve_requests: 2
+
+    # Vehicle and command limits
+    mass_kg: 1.35
+    gravity_mps2: 9.81
+    hover_thrust_n: 0.0
+    min_thrust_n: 0.0
+    max_thrust_n: 20.0
+    thrust_norm_scale: 0.0
+    arm_length_m: 0.25
+    inertia_xx_kgm2: 0.029
+    inertia_yy_kgm2: 0.029
+    inertia_zz_kgm2: 0.055
+    yaw_moment_coefficient: 0.1
+    min_motor_thrust_n: 0.0
+    max_motor_thrust_n: 5.0
+    max_roll_torque_nm: 1.0
+    max_pitch_torque_nm: 1.0
+    max_yaw_torque_nm: 1.0
+    torque_norm_scale_x: 0.0
+    torque_norm_scale_y: 0.0
+    torque_norm_scale_z: 0.0
+    target_yaw_rad: 0.0
+    reference_mode: active_setpoint
+    reference_topic: ""
+    reference_max_yaw_rate_rad_s: 0.6
+    reference_trajectory_period_s: 8.0
+    reference_circle_radius_m: 0.5
+    reference_figure_eight_amplitude_m: 0.5
+    reference_vertical_amplitude_m: 0.0
+    reference_allow_jump: false
+    target_x_m: 0.0
+    target_y_m: 0.0
+    target_z_m: -3.0
+    solver_type: CLDDP
+    reference_max_climb_rate_mps: 1.0
+    reference_max_climb_accel_mps2: 1.5
+    reference_smoothing_tau_s: 0.6
+
+    # Solver shaping
+    max_iterations: 4
+    constraint_tolerance: 0.2
+    solve_timeout_ms: 450.0
+    takeoff_min_thrust_margin_n: 1.0
+    min_flight_thrust_ratio: 0.55
+    hover_min_thrust_ratio: 1.0
+    landing_min_thrust_ratio: 0.3
+    thrust_slew_rate_n_per_s: 6.0
+    body_torque_slew_nm_per_s: 1.8
+    command_validity_thrust_jump_n: 8.0
+    command_validity_torque_jump_nm: 0.6
+    enable_rotational_indi: false
+    indi_blend_alpha: 0.2
+    indi_rate_lpf_cutoff_hz: 30.0
+    indi_accel_lpf_cutoff_hz: 18.0
+    indi_torque_correction_limit_nm: 0.08
+    indi_max_measurement_age_s: 0.1
+    indi_max_body_rate_rad_s: 12.0
+    indi_use_rpm_feedback: false
+    indi_debug_logging_enabled: false
+
+    # MPC objective weights
+    pos_weight: 2.0
+    vel_weight: 5.0
+    yaw_weight: 0.8
+    tilt_weight: 5.0
+    thrust_weight: 0.08
+    rate_weight: 0.08
+    terminal_pos_weight: 6.0
+    terminal_vel_weight: 4.0
+    terminal_yaw_weight: 2.5
+    terminal_tilt_weight: 6.0
+
+    # Logs
+    debug_logging_enabled: true
+
+    # PX4 state bridge
+    odom_quaternion_order: auto
+    odom_body_frame: auto
+    require_ned_pose_frame: true
+    require_ned_velocity_frame: true
+    expected_pose_frame_ned: 1
+    expected_velocity_frame_ned: 1

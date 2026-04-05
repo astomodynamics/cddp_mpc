@@ -1,0 +1,95 @@
+services:
+  cddp-mpc-dev:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: dev
+      args:
+        CUDA_VERSION: "12.3.2"
+        UBUNTU_VERSION: "22.04"
+        ROS_DISTRO: "humble"
+        USER_UID: ${USER_UID:-1000}
+        USER_GID: ${USER_GID:-1000}
+    image: cddp-mpc:dev
+    container_name: cddp-mpc-dev
+    hostname: cddp-mpc
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - ROS_HOME=/tmp/ros
+      - ROS_LOG_DIR=/tmp/ros/log
+      - LIBGL_ALWAYS_SOFTWARE=0
+      - GZ_PARTITION=${GZ_PARTITION:-cddp_mpc}
+      - XDG_RUNTIME_DIR=/tmp/runtime-developer
+
+    volumes:
+      - .:/home/developer/ws/src/cddp_mpc
+      - ./docker/entrypoint.sh:/entrypoint.sh:ro
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - cddp-mpc-bash-history:/home/developer/.bash_history
+      - cddp-mpc-ros-logs:/home/developer/.ros
+      - cddp-mpc-px4-logs:/tmp/px4_logs
+
+    network_mode: host
+    stdin_open: true
+    tty: true
+    working_dir: /home/developer/ws/src/cddp_mpc
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    command: ["sleep", "infinity"]
+
+  cddp-mpc-sim:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: prod
+      args:
+        CUDA_VERSION: "12.3.2"
+        UBUNTU_VERSION: "22.04"
+        ROS_DISTRO: "humble"
+    image: cddp-mpc:prod
+    container_name: cddp-mpc-sim
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - ROS_HOME=/tmp/ros
+      - ROS_LOG_DIR=/tmp/ros/log
+      - GZ_PARTITION=${GZ_PARTITION:-cddp_mpc}
+      - XDG_RUNTIME_DIR=/tmp/runtime-appuser
+
+    network_mode: host
+    stdin_open: true
+    tty: true
+    working_dir: /app/ros_ws/src/cddp_mpc
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    volumes:
+      - .:/app/ros_ws/src/cddp_mpc:ro
+      - ./docker/entrypoint.sh:/entrypoint.sh:ro
+      - cddp-mpc-px4-logs:/tmp/px4_logs
+
+volumes:
+  cddp-mpc-bash-history:
+  cddp-mpc-ros-logs:
+  cddp-mpc-px4-logs:
