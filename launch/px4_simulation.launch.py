@@ -15,11 +15,9 @@ def launch_px4_sitl(context, *args, **kwargs):
     world = LaunchConfiguration("world").perform(context)
     return [
         ExecuteProcess(
-            cmd=[
-                "bash",
-                "-c",
-                f"cd /opt/PX4-Autopilot && PX4_GZ_WORLD={world} make px4_sitl {vehicle}",
-            ],
+            cmd=["make", "px4_sitl", vehicle],
+            cwd="/opt/PX4-Autopilot",
+            additional_env={"PX4_GZ_WORLD": world},
             output="screen",
             name="px4_sitl_gazebo",
             on_exit=LogInfo(msg="PX4 SITL terminated"),

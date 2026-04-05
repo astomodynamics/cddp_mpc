@@ -1,6 +1,7 @@
 #ifndef CDDP_MPC_REFERENCE_PROVIDER_HPP
 #define CDDP_MPC_REFERENCE_PROVIDER_HPP
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -62,8 +63,12 @@ private:
   AxisProfile buildAxisProfile(double position_error, double velocity,
                                double target_position_error) const;
   double clampYawStep(double previous_yaw, double desired_yaw) const;
-  TrajectoryPoint buildPointFromMode(const Eigen::VectorXd &initial_state,
-                                     double time_s, double previous_yaw) const;
+  TrajectoryPoint buildPointFromMode(double time_s, double previous_yaw) const;
+  TrajectoryPoint buildPointFromProfiles(const AxisProfile &x_profile,
+                                         const AxisProfile &y_profile,
+                                         const AxisProfile &z_profile,
+                                         std::size_t idx,
+                                         double previous_yaw) const;
 
   ReferenceConfig config_;
 };

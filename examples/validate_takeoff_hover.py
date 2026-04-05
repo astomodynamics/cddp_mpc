@@ -179,7 +179,7 @@ class HoverMissionValidator(Node):
             or "LAND" in self.modes_seen
             or "LAND_DONE" in self.modes_seen
         )
-        hover_done_ok = "HOVER_DONE" in self.modes_seen
+        hover_done_ok = "LAND" in self.modes_seen or "LAND_DONE" in self.modes_seen
         diagnostics_ok = True
         if offboard_validation:
             diagnostics_ok = self.diag_count > 0 and self.solver_success_seen
@@ -327,7 +327,11 @@ def parse_args() -> ValidationConfig:
     parser.add_argument("--timeout-sec", type=float, default=90.0)
     parser.add_argument("--min-heartbeat-msgs", type=int, default=10)
     parser.add_argument("--min-setpoint-msgs", type=int, default=10)
-    parser.add_argument("--require-hover-done", action="store_true")
+    parser.add_argument(
+        "--require-hover-done",
+        action="store_true",
+        help="Require diagnostics to progress past HOVER into LAND or LAND_DONE.",
+    )
     parser.add_argument("--min-climb-m", type=float, default=0.0)
     parser.add_argument("--climb-timeout-sec", type=float, default=25.0)
     parser.add_argument("--max-downward-speed-mps", type=float, default=0.0)

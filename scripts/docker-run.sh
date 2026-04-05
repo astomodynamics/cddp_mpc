@@ -12,7 +12,7 @@ cd "$PROJECT_DIR"
 export USER_UID=$(id -u)
 export USER_GID=$(id -g)
 
-xhost +local:docker 2>/dev/null || true
+xhost "+si:localuser:$(id -un)" 2>/dev/null || true
 
 if [ "$#" -eq 0 ]; then
     set -- bash

@@ -84,8 +84,7 @@ double PositionYawReferenceProvider::clampYawStep(double previous_yaw,
 }
 
 PositionYawReferenceProvider::TrajectoryPoint
-PositionYawReferenceProvider::buildPointFromMode(const Eigen::VectorXd &initial_state,
-                                                 double time_s,
+PositionYawReferenceProvider::buildPointFromMode(double time_s,
                                                  double previous_yaw) const {
   TrajectoryPoint point;
   const double safe_period = std::max(config_.trajectory_period_s, config_.mpc_dt);
@@ -117,24 +116,35 @@ PositionYawReferenceProvider::buildPointFromMode(const Eigen::VectorXd &initial_
         -2.0 * amplitude * omega * omega * std::sin(2.0 * omega * time_s);
     point.acceleration.z() =
         -vertical_amplitude * omega * omega * std::sin(omega * time_s);
-  } else {
-    const AxisProfile x_profile = buildAxisProfile(initial_state(0), initial_state(7), 0.0);
-    const AxisProfile y_profile = buildAxisProfile(initial_state(1), initial_state(8), 0.0);
-    const AxisProfile z_profile = buildAxisProfile(initial_state(2), initial_state(9), 0.0);
-    const std::size_t idx = static_cast<std::size_t>(
-        std::clamp(static_cast<int>(std::llround(time_s / std::max(config_.mpc_dt, 1e-6))), 0,
-                   config_.horizon_steps));
-    point.position_error.x() = x_profile.positions[idx];
-    point.position_error.y() = y_profile.positions[idx];
-    point.position_error.z() = z_profile.positions[idx];
-    point.velocity.x() = x_profile.velocities[idx];
-    point.velocity.y() = y_profile.velocities[idx];
-    point.velocity.z() = z_profile.velocities[idx];
-    point.acceleration.x() = x_profile.accelerations[idx];
-    point.acceleration.y() = y_profile.accelerations[idx];
-    point.acceleration.z() = z_profile.accelerations[idx];
   }
 
+  point.velocity =
+      point.velocity.cwiseMax(Eigen::Vector3d::Constant(-config_.max_axis_speed_mps))
+          .cwiseMin(Eigen::Vector3d::Constant(config_.max_axis_speed_mps));
+  point.acceleration =
+      point.acceleration.cwiseMax(Eigen::Vector3d::Constant(-config_.max_axis_accel_mps2))
+          .cwiseMin(Eigen::Vector3d::Constant(config_.max_axis_accel_mps2));
+
+  point.yaw_rad = clampYawStep(previous_yaw, config_.target_yaw_rad);
+  return point;
+}
+
+PositionYawReferenceProvider::TrajectoryPoint
+PositionYawReferenceProvider::buildPointFromProfiles(const AxisProfile &x_profile,
+                                                     const AxisProfile &y_profile,
+                                                     const AxisProfile &z_profile,
+                                                     std::size_t idx,
+                                                     double previous_yaw) const {
+  TrajectoryPoint point;
+  point.position_error.x() = x_profile.positions[idx];
+  point.position_error.y() = y_profile.positions[idx];
+  point.position_error.z() = z_profile.positions[idx];
+  point.velocity.x() = x_profile.velocities[idx];
+  point.velocity.y() = y_profile.velocities[idx];
+  point.velocity.z() = z_profile.velocities[idx];
+  point.acceleration.x() = x_profile.accelerations[idx];
+  point.acceleration.y() = y_profile.accelerations[idx];
+  point.acceleration.z() = z_profile.accelerations[idx];
   point.velocity =
       point.velocity.cwiseMax(Eigen::Vector3d::Constant(-config_.max_axis_speed_mps))
           .cwiseMin(Eigen::Vector3d::Constant(config_.max_axis_speed_mps));
@@ -154,10 +164,25 @@ PositionYawReferenceProvider::build(const Eigen::VectorXd &initial_state) const 
   trajectory.states.reserve(sample_count);
   trajectory.controls.reserve(sample_count);
 
+  const bool uses_axis_profiles =
+      config_.mode != "circle" && config_.mode != "figure_eight";
+  AxisProfile x_profile;
+  AxisProfile y_profile;
+  AxisProfile z_profile;
+  if (uses_axis_profiles) {
+    x_profile = buildAxisProfile(initial_state(0), initial_state(7), 0.0);
+    y_profile = buildAxisProfile(initial_state(1), initial_state(8), 0.0);
+    z_profile = buildAxisProfile(initial_state(2), initial_state(9), 0.0);
+  }
+
   double yaw_rad = config_.target_yaw_rad;
   for (int i = 0; i <= config_.horizon_steps; ++i) {
     const double time_s = static_cast<double>(i) * std::max(config_.mpc_dt, 1e-6);
-    const TrajectoryPoint point = buildPointFromMode(initial_state, time_s, yaw_rad);
+    const TrajectoryPoint point =
+        uses_axis_profiles
+            ? buildPointFromProfiles(x_profile, y_profile, z_profile,
+                                     static_cast<std::size_t>(i), yaw_rad)
+            : buildPointFromMode(time_s, yaw_rad);
     yaw_rad = point.yaw_rad;
     const Eigen::Quaterniond q_ref = yawNedToQuaternionEnu(yaw_rad);
 

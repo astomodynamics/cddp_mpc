@@ -171,7 +171,7 @@ class ValidateTakeoffHoverTests(unittest.TestCase):
         self.assertTrue(criteria["torque_stream"])
         self.assertTrue(criteria["diagnostics_ok"])
 
-    def test_require_hover_done_fails_without_hover_done_mode(self) -> None:
+    def test_require_hover_done_fails_while_still_hovering(self) -> None:
         config = self.validator_module.ValidationConfig(
             validation_mode="offboard",
             require_hover_done=True,
@@ -183,14 +183,14 @@ class ValidateTakeoffHoverTests(unittest.TestCase):
 
         self.assertFalse(criteria["diagnostics_ok"])
 
-    def test_require_hover_done_passes_with_hover_done_mode(self) -> None:
+    def test_require_hover_done_passes_after_hover_completes(self) -> None:
         config = self.validator_module.ValidationConfig(
             validation_mode="offboard",
             require_hover_done=True,
         )
         node = self.validator_module.HoverMissionValidator(config)
         _seed_success_basics(node)
-        node.modes_seen = {"HOVER_DONE"}
+        node.modes_seen = {"HOVER", "LAND"}
 
         criteria = node._criteria()
 

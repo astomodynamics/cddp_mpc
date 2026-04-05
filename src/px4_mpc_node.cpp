@@ -528,9 +528,6 @@ private:
 
     odometry_received_ = true;
     odom_frame_ok_ = odom.frame_ok;
-    current_body_rates_ = odom.angular_velocity;
-    updateIndiMeasurement(msg->timestamp * 1e-6, current_body_rates_.value(),
-                          "vehicle_odometry");
 
     if (!odom.frame_ok) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
@@ -538,6 +535,9 @@ private:
       return;
     }
 
+    current_body_rates_ = odom.angular_velocity;
+    updateIndiMeasurement(msg->timestamp * 1e-6, current_body_rates_.value(),
+                          "vehicle_odometry");
     current_position_ned_ = odom.position;
     current_velocity_ned_ = odom.velocity;
     current_attitude_ned_ = odom.attitude_wxyz;
