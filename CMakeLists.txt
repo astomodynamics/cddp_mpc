@@ -14,9 +14,12 @@ set(CMAKE_BUILD_TYPE "Release") # Set the build type to Release by default
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
 
@@ -59,8 +62,24 @@ target_link_libraries(px4_mpc_node
   cddp
 )
 
-install(TARGETS 
+add_executable(px4_visualizer src/px4_visualizer.cpp)
+target_include_directories(px4_visualizer PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(px4_visualizer
+  diagnostic_msgs
+  Eigen3
+  geometry_msgs
+  nav_msgs
+  px4_msgs
+  rclcpp
+  visualization_msgs
+)
+
+install(TARGETS
   px4_mpc_node
+  px4_visualizer
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -68,6 +87,9 @@ install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME})
 
 install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME})
+
+install(DIRECTORY rviz
   DESTINATION share/${PROJECT_NAME})
 
 install(DIRECTORY examples

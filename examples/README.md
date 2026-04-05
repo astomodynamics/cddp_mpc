@@ -2,6 +2,14 @@
 
 This directory contains helper scripts for PX4 simulation, validation, and tuning with `cddp_mpc`.
 
+Most validation and tuning scripts assume the simulator stack and controller are already
+running, typically via:
+
+```bash
+ros2 launch cddp_mpc px4_simulation.launch.py
+ros2 launch cddp_mpc mpc_offboard.launch.py
+```
+
 ## Quick Start Scripts
 
 ### 1. Test PX4 Connection

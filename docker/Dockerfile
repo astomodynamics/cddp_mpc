@@ -37,6 +37,7 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o 
 
 RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-ros-base \
+    ros-${ROS_DISTRO}-rviz2 \
     ros-${ROS_DISTRO}-tf2 \
     ros-${ROS_DISTRO}-tf2-geometry-msgs \
     ros-${ROS_DISTRO}-launch-ros \

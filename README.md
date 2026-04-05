@@ -120,6 +120,9 @@ The launch sequence now matches `naiten-mpc`:
 sb
 ros2 launch cddp_mpc px4_simulation.launch.py
 
+# Optional: launch RViz with the packaged px4_visualizer config as part of the sim stack
+ros2 launch cddp_mpc px4_simulation.launch.py launch_rviz:=true
+
 # Shell 2 inside the same container: run the CDDP offboard MPC node with SITL defaults
 sb
 ros2 launch cddp_mpc mpc_offboard.launch.py
@@ -128,12 +131,18 @@ ros2 launch cddp_mpc mpc_offboard.launch.py
 ros2 launch cddp_mpc mpc_offboard.launch.py params_file:=/path/to/params.yaml
 ```
 
-`minimal_simulation.launch.py` is also available for the same CLI-friendly flow, just like in `naiten-mpc`:
+When `launch_visualizer:=true` or `launch_rviz:=true`, the package starts
+`px4_visualizer`, which publishes:
 
-```bash
-sb
-ros2 launch cddp_mpc minimal_simulation.launch.py
-```
+- `/px4_visualizer/vehicle_pose`
+- `/px4_visualizer/vehicle_path`
+- `/px4_visualizer/setpoint_path`
+- `/px4_visualizer/vehicle_velocity`
+- `/px4_visualizer/setpoint_marker`
+
+These are standard ROS topics for visualization. You can start `rviz2` with the
+packaged `rviz/px4_visualizer.rviz` config from either the simulation launch or
+the MPC launch using `launch_rviz:=true`.
 
 ### Hardware Validation Launch
 
@@ -194,7 +203,7 @@ Use this flow to validate autonomous takeoff and hover driven by the CDDP solver
 ```bash
 # Terminal 1
 sb
-ros2 launch cddp_mpc minimal_simulation.launch.py
+ros2 launch cddp_mpc px4_simulation.launch.py
 
 # Terminal 2
 sb
@@ -310,11 +319,8 @@ Expected mode progression in `/cddp_mpc/status`: `INIT` -> `TAKEOFF` -> `HOVER` 
 Available launch files:
 
 - `ros2 launch cddp_mpc px4_simulation.launch.py`
-- `ros2 launch cddp_mpc minimal_simulation.launch.py`
 - `ros2 launch cddp_mpc mpc_offboard.launch.py`
 - `ros2 launch cddp_mpc hardware_validation.launch.py`
-- `ros2 launch cddp_mpc px4_mpc_offboard.launch.py`
-  This remains as a backward-compatible alias to `mpc_offboard.launch.py`, including `params_file:=...` overrides.
 
 The PX4 node prefers `VehicleOdometry` when it is available and frame-valid, and falls back to local position plus attitude otherwise.
 
