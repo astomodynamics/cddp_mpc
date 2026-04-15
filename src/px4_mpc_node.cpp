@@ -3,14 +3,15 @@
 #include <cinttypes>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
-#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,9 @@
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <diagnostic_msgs/msg/key_value.hpp>
 #include <Eigen/Dense>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
@@ -33,13 +37,16 @@
 #define CDDP_MPC_HAS_VEHICLE_ANGULAR_VELOCITY 0
 #endif
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joy.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 
 #include "cddp.hpp"
 #include "cddp_mpc/controller_logic.hpp"
 #include "cddp_mpc/error_state_quadrotor_thrust.hpp"
 #include "cddp_mpc/indi_rotational_compensator.hpp"
 #include "cddp_mpc/px4_utils.hpp"
+#include "cddp_mpc/reference_manager.hpp"
 #include "cddp_mpc/reference_provider.hpp"
 #include "cddp_mpc/thrust_allocation_constraint.hpp"
 
@@ -62,6 +69,11 @@ using diagnostic_msgs::msg::DiagnosticArray;
 using diagnostic_msgs::msg::DiagnosticStatus;
 using diagnostic_msgs::msg::KeyValue;
 using cddp_mpc::ReferenceTrajectory;
+using geometry_msgs::msg::PoseStamped;
+using geometry_msgs::msg::TwistStamped;
+using nav_msgs::msg::Path;
+using sensor_msgs::msg::Joy;
+using visualization_msgs::msg::Marker;
 
 std::string formatDouble(double value, int precision = 3) {
   if (!std::isfinite(value)) {
@@ -72,6 +84,42 @@ std::string formatDouble(double value, int precision = 3) {
   stream.precision(precision);
   stream << value;
   return stream.str();
+}
+
+std::string trimTrailingSlashes(std::string value) {
+  while (value.size() > 1 && value.back() == '/') {
+    value.pop_back();
+  }
+  return value;
+}
+
+std::string topicFromPrefix(const std::string &prefix, const std::string &suffix) {
+  const std::string normalized_prefix = trimTrailingSlashes(prefix);
+  if (normalized_prefix.empty()) {
+    return suffix;
+  }
+  if (normalized_prefix == "/") {
+    return "/" + suffix;
+  }
+  return normalized_prefix + "/" + suffix;
+}
+
+double wrapAngle(double angle_rad) {
+  constexpr double kPi = 3.14159265358979323846;
+  while (angle_rad > kPi) {
+    angle_rad -= 2.0 * kPi;
+  }
+  while (angle_rad < -kPi) {
+    angle_rad += 2.0 * kPi;
+  }
+  return angle_rad;
+}
+
+double yawFromQuaternionEnu(const Eigen::Quaterniond &q_enu) {
+  const double siny_cosp = 2.0 * (q_enu.w() * q_enu.z() + q_enu.x() * q_enu.y());
+  const double cosy_cosp =
+      1.0 - 2.0 * (q_enu.y() * q_enu.y() + q_enu.z() * q_enu.z());
+  return std::atan2(siny_cosp, cosy_cosp);
 }
 
 struct SolveResult {
@@ -93,11 +141,23 @@ struct SolveResult {
   std::vector<Eigen::VectorXd> control_trajectory;
 };
 
-struct PendingSolve {
+struct SolverRequest {
   std::uint64_t request_id{0};
+  double enqueue_time_s{0.0};
+  Eigen::VectorXd initial_state;
+  ReferenceTrajectory reference_trajectory;
+  std::vector<Eigen::VectorXd> initial_state_guess;
+  std::vector<Eigen::VectorXd> initial_control_guess;
+  Eigen::Vector3d reference_target_enu{Eigen::Vector3d::Zero()};
+  bool landing_mode{false};
+};
+
+struct CompletedSolve {
   double start_time_s{0.0};
-  bool timeout_reported{false};
-  std::future<SolveResult> future;
+  double completion_time_s{0.0};
+  bool overran_budget{false};
+  Eigen::Vector3d reference_target_enu{Eigen::Vector3d::Zero()};
+  SolveResult result;
 };
 
 struct SafetyTrace {
@@ -121,6 +181,37 @@ public:
         reference_controls_(std::move(reference_controls)) {
     reference_state_ = reference_state;
     reference_states_ = std::move(reference_states);
+  }
+
+  void setReferenceState(const Eigen::VectorXd &reference_state) override {
+    reference_state_ = reference_state;
+    if (reference_states_.empty()) {
+      reference_states_.push_back(reference_state_);
+    } else {
+      reference_states_.back() = reference_state_;
+    }
+  }
+
+  void setReferenceStates(
+      const std::vector<Eigen::VectorXd> &reference_states) override {
+    reference_states_ = reference_states;
+    if (!reference_states_.empty()) {
+      reference_state_ = reference_states_.back();
+    }
+  }
+
+  void setReferenceControls(std::vector<Eigen::VectorXd> reference_controls) {
+    reference_controls_ = std::move(reference_controls);
+    if (!reference_controls_.empty()) {
+      default_control_ = reference_controls_.front();
+    }
+  }
+
+  void setReferenceTrajectory(
+      const std::vector<Eigen::VectorXd> &reference_states,
+      std::vector<Eigen::VectorXd> reference_controls) {
+    setReferenceStates(reference_states);
+    setReferenceControls(std::move(reference_controls));
   }
 
   double evaluate(const std::vector<Eigen::VectorXd> &states,
@@ -197,6 +288,9 @@ private:
   }
 
   const Eigen::VectorXd &referenceControlAt(int index) const {
+    if (reference_controls_.empty()) {
+      return default_control_;
+    }
     const std::size_t clamped_index = static_cast<std::size_t>(
         std::clamp(index, 0, static_cast<int>(reference_controls_.size() - 1)));
     return reference_controls_[clamped_index];
@@ -207,6 +301,7 @@ private:
   Eigen::MatrixXd Qf_;
   double timestep_{0.1};
   std::vector<Eigen::VectorXd> reference_controls_;
+  Eigen::VectorXd default_control_{Eigen::VectorXd::Zero(4)};
 };
 
 class PX4MPCNode : public rclcpp::Node {
@@ -223,6 +318,8 @@ public:
     hover_thrust_n_ = hover_thrust_n_ > 0.0 ? hover_thrust_n_ : mass_kg_ * gravity_mps2_;
     reference_provider_ = std::make_unique<cddp_mpc::PositionYawReferenceProvider>(
         buildReferenceConfig());
+    reference_manager_ = std::make_unique<cddp_mpc::ReferenceManager>(
+        buildReferenceManagerConfig());
     rotational_indi_ =
         std::make_unique<cddp_mpc::IndiRotationalCompensator>(inertiaMatrix());
     rotational_indi_->setConfig(buildIndiConfig());
@@ -236,36 +333,53 @@ public:
     auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
 
     local_position_sub_ = create_subscription<VehicleLocalPosition>(
-        "/fmu/out/vehicle_local_position", qos,
+        local_position_topic_, qos,
         std::bind(&PX4MPCNode::localPositionCallback, this, std::placeholders::_1));
     odometry_sub_ = create_subscription<VehicleOdometry>(
-        "/fmu/out/vehicle_odometry", qos,
+        odometry_topic_, qos,
         std::bind(&PX4MPCNode::odometryCallback, this, std::placeholders::_1));
     attitude_sub_ = create_subscription<VehicleAttitude>(
-        "/fmu/out/vehicle_attitude", qos,
+        attitude_topic_, qos,
         std::bind(&PX4MPCNode::attitudeCallback, this, std::placeholders::_1));
     vehicle_status_sub_ = create_subscription<VehicleStatus>(
-        "/fmu/out/vehicle_status", qos,
+        vehicle_status_topic_, qos,
         std::bind(&PX4MPCNode::vehicleStatusCallback, this, std::placeholders::_1));
+    teleop_sub_ = create_subscription<TwistStamped>(
+        teleop_topic_, rclcpp::QoS(10),
+        std::bind(&PX4MPCNode::teleopCallback, this, std::placeholders::_1));
+    joy_sub_ = create_subscription<Joy>(
+        joy_topic_, rclcpp::QoS(10),
+        std::bind(&PX4MPCNode::joyCallback, this, std::placeholders::_1));
+    goal_pose_sub_ = create_subscription<PoseStamped>(
+        goal_pose_topic_, rclcpp::QoS(10),
+        std::bind(&PX4MPCNode::goalPoseCallback, this, std::placeholders::_1));
 #if CDDP_MPC_HAS_VEHICLE_ANGULAR_VELOCITY
     angular_velocity_sub_ = create_subscription<VehicleAngularVelocity>(
-        "/fmu/out/vehicle_angular_velocity", qos,
+        angular_velocity_topic_, qos,
         std::bind(&PX4MPCNode::angularVelocityCallback, this, std::placeholders::_1));
 #endif
 
     offboard_mode_pub_ = create_publisher<OffboardControlMode>(
-        "/fmu/in/offboard_control_mode", qos);
+        offboard_control_mode_topic_, qos);
     vehicle_thrust_pub_ = create_publisher<VehicleThrustSetpoint>(
-        "/fmu/in/vehicle_thrust_setpoint", qos);
+        vehicle_thrust_setpoint_topic_, qos);
     vehicle_torque_pub_ = create_publisher<VehicleTorqueSetpoint>(
-        "/fmu/in/vehicle_torque_setpoint", qos);
+        vehicle_torque_setpoint_topic_, qos);
     vehicle_command_pub_ = create_publisher<VehicleCommand>(
-        "/fmu/in/vehicle_command", qos);
+        vehicle_command_topic_, qos);
     diagnostic_pub_ =
-        create_publisher<DiagnosticArray>("/cddp_mpc/status", rclcpp::QoS(10));
+        create_publisher<DiagnosticArray>(status_topic_, rclcpp::QoS(10));
+    active_goal_pub_ =
+        create_publisher<PoseStamped>(active_goal_topic_, rclcpp::QoS(10));
+    predicted_path_pub_ =
+        create_publisher<Path>(predicted_path_topic_, rclcpp::QoS(10));
+    geofence_marker_pub_ =
+        create_publisher<Marker>(geofence_topic_, rclcpp::QoS(10));
+    safety_text_pub_ =
+        create_publisher<Marker>(safety_text_topic_, rclcpp::QoS(10));
 
     start_mission_service_ = create_service<std_srvs::srv::Trigger>(
-        "/cddp_mpc/start_mission",
+        start_mission_service_name_,
         std::bind(&PX4MPCNode::handleStartMission, this, std::placeholders::_1,
                   std::placeholders::_2));
 
@@ -277,14 +391,18 @@ public:
         std::bind(&PX4MPCNode::solveLoop, this));
     offboard_timer_ = create_wall_timer(
         100ms, std::bind(&PX4MPCNode::publishOffboardControlMode, this));
+    solver_thread_ = std::thread(&PX4MPCNode::solverWorkerLoop, this);
 
     RCLCPP_INFO(get_logger(),
                 "Initialized PX4 CDDP MPC node (control=%.1f Hz, solve=%.1f Hz, "
-                "horizon=%d, dt=%.3f s)",
-                control_rate_hz_, solve_rate_hz_, horizon_steps_, mpc_dt_);
+                "horizon=%d, dt=%.3f s, fmu_prefix=%s, controller_prefix=%s, "
+                "target_system=%d)",
+                control_rate_hz_, solve_rate_hz_, horizon_steps_, mpc_dt_,
+                fmu_prefix_.c_str(), controller_prefix_.c_str(), target_system_);
     if (!auto_start_sequence_) {
       RCLCPP_INFO(get_logger(),
-                  "Mission start is gated. Call /cddp_mpc/start_mission to begin.");
+                  "Mission start is gated. Call %s to begin.",
+                  start_mission_service_name_.c_str());
     }
     if (indi_use_rpm_feedback_) {
       RCLCPP_WARN(get_logger(),
@@ -293,10 +411,53 @@ public:
     }
   }
 
+  ~PX4MPCNode() override { stopSolverWorker(); }
+
 private:
   void loadParameters() {
+    fmu_prefix_ = trimTrailingSlashes(declareOrGet("fmu_prefix", std::string("/fmu")));
+    controller_prefix_ = trimTrailingSlashes(
+        declareOrGet("controller_prefix", std::string("/cddp_mpc")));
+    target_system_ = declareOrGet("target_system", 1);
+    target_component_ = declareOrGet("target_component", 1);
+    source_system_ = declareOrGet("source_system", 1);
+    source_component_ = declareOrGet("source_component", 1);
+
+    local_position_topic_ = declareOrGet(
+        "local_position_topic", topicFromPrefix(fmu_prefix_, "out/vehicle_local_position"));
+    odometry_topic_ =
+        declareOrGet("odometry_topic", topicFromPrefix(fmu_prefix_, "out/vehicle_odometry"));
+    attitude_topic_ =
+        declareOrGet("attitude_topic", topicFromPrefix(fmu_prefix_, "out/vehicle_attitude"));
+    vehicle_status_topic_ = declareOrGet(
+        "vehicle_status_topic", topicFromPrefix(fmu_prefix_, "out/vehicle_status"));
+    angular_velocity_topic_ = declareOrGet(
+        "angular_velocity_topic", topicFromPrefix(fmu_prefix_, "out/vehicle_angular_velocity"));
+    offboard_control_mode_topic_ = declareOrGet(
+        "offboard_control_mode_topic", topicFromPrefix(fmu_prefix_, "in/offboard_control_mode"));
+    vehicle_thrust_setpoint_topic_ = declareOrGet(
+        "vehicle_thrust_setpoint_topic",
+        topicFromPrefix(fmu_prefix_, "in/vehicle_thrust_setpoint"));
+    vehicle_torque_setpoint_topic_ = declareOrGet(
+        "vehicle_torque_setpoint_topic",
+        topicFromPrefix(fmu_prefix_, "in/vehicle_torque_setpoint"));
+    vehicle_command_topic_ = declareOrGet(
+        "vehicle_command_topic", topicFromPrefix(fmu_prefix_, "in/vehicle_command"));
+    status_topic_ =
+        declareOrGet("status_topic", topicFromPrefix(controller_prefix_, "status"));
+    active_goal_topic_ =
+        declareOrGet("active_goal_topic", topicFromPrefix(controller_prefix_, "active_goal"));
+    predicted_path_topic_ = declareOrGet(
+        "predicted_path_topic", topicFromPrefix(controller_prefix_, "predicted_path"));
+    geofence_topic_ =
+        declareOrGet("geofence_topic", topicFromPrefix(controller_prefix_, "geofence"));
+    safety_text_topic_ =
+        declareOrGet("safety_text_topic", topicFromPrefix(controller_prefix_, "safety_text"));
+    start_mission_service_name_ = declareOrGet(
+        "start_mission_service", topicFromPrefix(controller_prefix_, "start_mission"));
+
     control_rate_hz_ = declareOrGet("control_rate_hz", 100.0);
-    solve_rate_hz_ = declareOrGet("solve_rate_hz", 20.0);
+    solve_rate_hz_ = declareOrGet("solve_rate_hz", 25.0);
     mpc_dt_ = declareOrGet("mpc_dt", 0.05);
     horizon_steps_ = declareOrGet("horizon_steps", 20);
     stale_plan_timeout_s_ = declareOrGet("stale_plan_timeout_s", 0.25);
@@ -371,6 +532,10 @@ private:
         declareOrGet("reference_max_climb_rate_mps", 1.0);
     reference_max_climb_accel_mps2_ =
         declareOrGet("reference_max_climb_accel_mps2", 1.5);
+    reference_max_xy_speed_mps_ =
+        declareOrGet("reference_max_xy_speed_mps", reference_max_climb_rate_mps_);
+    reference_max_xy_accel_mps2_ =
+        declareOrGet("reference_max_xy_accel_mps2", reference_max_climb_accel_mps2_);
     reference_smoothing_tau_s_ =
         declareOrGet("reference_smoothing_tau_s", 0.6);
     reference_mode_ = declareOrGet("reference_mode", std::string("active_setpoint"));
@@ -389,6 +554,24 @@ private:
     target_x_m_ = declareOrGet("target_x_m", 0.0);
     target_y_m_ = declareOrGet("target_y_m", 0.0);
     target_z_m_ = declareOrGet("target_z_m", -3.0);
+    teleop_topic_ = declareOrGet("teleop_topic", std::string("/teleop/cmd_vel"));
+    joy_topic_ = declareOrGet("joy_topic", std::string("/joy"));
+    teleop_frame_ = declareOrGet("teleop_frame", std::string("body"));
+    teleop_timeout_s_ = declareOrGet("teleop_timeout_s", 0.2);
+    teleop_require_deadman_ = declareOrGet("teleop_require_deadman", true);
+    teleop_deadman_button_index_ = declareOrGet("teleop_deadman_button_index", 4);
+    teleop_max_xy_speed_mps_ = declareOrGet("teleop_max_xy_speed_mps", 1.0);
+    teleop_max_z_speed_mps_ = declareOrGet("teleop_max_z_speed_mps", 0.6);
+    teleop_max_yaw_rate_rad_s_ =
+        declareOrGet("teleop_max_yaw_rate_rad_s", 0.8);
+    goal_pose_topic_ =
+        declareOrGet("goal_pose_topic", topicFromPrefix(controller_prefix_, "goal_pose"));
+    goal_pose_frame_ = declareOrGet("goal_pose_frame", std::string("map"));
+    goal_timeout_s_ = declareOrGet("goal_timeout_s", 1.0);
+    geofence_half_extent_x_m_ = declareOrGet("geofence_half_extent_x_m", 5.0);
+    geofence_half_extent_y_m_ = declareOrGet("geofence_half_extent_y_m", 5.0);
+    geofence_min_z_m_ = declareOrGet("geofence_min_z_m", 0.0);
+    geofence_max_z_m_ = declareOrGet("geofence_max_z_m", 5.0);
     odom_frame_config_.quaternion_order =
         declareOrGet("odom_quaternion_order", std::string("auto"));
     odom_frame_config_.odom_body_frame =
@@ -414,8 +597,11 @@ private:
     terminal_tilt_weight_ = declareOrGet("terminal_tilt_weight", 6.0);
 
     max_iterations_ = declareOrGet("max_iterations", 8);
+    realtime_mode_ = declareOrGet("realtime_mode", true);
+    rti_max_iterations_ = declareOrGet("rti_max_iterations", 5);
     constraint_tolerance_ = declareOrGet("constraint_tolerance", 0.5);
     solve_timeout_ms_ = declareOrGet("solve_timeout_ms", 450.0);
+    solve_budget_ms_ = declareOrGet("solve_budget_ms", solve_timeout_ms_);
     max_pending_solve_requests_ = static_cast<std::size_t>(
         std::max(1, declareOrGet("max_pending_solve_requests", 2)));
     takeoff_min_thrust_margin_n_ =
@@ -580,6 +766,49 @@ private:
         msg->nav_state == VehicleStatus::NAVIGATION_STATE_OFFBOARD;
   }
 
+  void teleopCallback(const TwistStamped::SharedPtr msg) {
+    if (!reference_manager_) {
+      return;
+    }
+    Eigen::Vector3d linear_velocity(msg->twist.linear.x, msg->twist.linear.y,
+                                    msg->twist.linear.z);
+    reference_manager_->updateTeleopCommand(
+        nowSeconds(), linear_velocity, msg->twist.angular.z,
+        teleop_frame_ == "world" ? cddp_mpc::TeleopFrame::World
+                                  : cddp_mpc::TeleopFrame::Body);
+  }
+
+  void joyCallback(const Joy::SharedPtr msg) {
+    if (!reference_manager_) {
+      return;
+    }
+    const bool deadman_pressed =
+        teleop_deadman_button_index_ >= 0 &&
+        teleop_deadman_button_index_ < static_cast<int>(msg->buttons.size()) &&
+        msg->buttons[static_cast<std::size_t>(teleop_deadman_button_index_)] != 0;
+    reference_manager_->updateDeadmanState(nowSeconds(), deadman_pressed);
+  }
+
+  void goalPoseCallback(const PoseStamped::SharedPtr msg) {
+    if (!reference_manager_) {
+      return;
+    }
+    if (!msg->header.frame_id.empty() && msg->header.frame_id != goal_pose_frame_) {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000,
+          "Ignoring goal pose in unexpected frame '%s' (expected '%s').",
+          msg->header.frame_id.c_str(), goal_pose_frame_.c_str());
+      return;
+    }
+    const Eigen::Quaterniond orientation(
+        msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y,
+        msg->pose.orientation.z);
+    const Eigen::Vector3d position(msg->pose.position.x, msg->pose.position.y,
+                                   msg->pose.position.z);
+    reference_manager_->updateGoalPose(nowSeconds(), position,
+                                       yawFromQuaternionEnu(orientation));
+  }
+
   void handleStartMission(
       const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -587,7 +816,8 @@ private:
     mode_request_time_ = nowSeconds();
     response->success = true;
     response->message = "mission start requested";
-    RCLCPP_INFO(get_logger(), "Mission start requested via /cddp_mpc/start_mission.");
+    RCLCPP_INFO(get_logger(), "Mission start requested via %s.",
+                start_mission_service_name_.c_str());
   }
 
   void controlLoop() {
@@ -601,6 +831,7 @@ private:
     }
 
     updateMode();
+    updateReferenceManager();
     pollSolveResult();
 
     SafetyTrace trace{};
@@ -629,6 +860,7 @@ private:
     last_published_command_ = command;
     publishVehicleThrustTorqueSetpoint(command);
     publishStatusDiagnostics();
+    publishReferenceVisualization();
     debugLog(command);
   }
 
@@ -641,24 +873,6 @@ private:
     }
 
     pollSolveResult();
-    bool has_fresh_request = false;
-    for (auto &pending : pending_solves_) {
-      const double age_ms = (nowSeconds() - pending.start_time_s) * 1000.0;
-      if (age_ms <= solve_timeout_ms_) {
-        has_fresh_request = true;
-      } else if (!pending.timeout_reported) {
-        pending.timeout_reported = true;
-        RCLCPP_WARN(get_logger(),
-                    "CDDP solve request %" PRIu64
-                    " exceeded timeout budget (%.1f ms > %.1f ms). "
-                    "Launching a fresher request if capacity allows.",
-                    pending.request_id, age_ms, solve_timeout_ms_);
-      }
-    }
-    if (has_fresh_request || pending_solves_.size() >= max_pending_solve_requests_) {
-      return;
-    }
-
     if (!(armed_ && offboard_enabled_)) {
       return;
     }
@@ -684,19 +898,14 @@ private:
     }
 
     const std::uint64_t request_id = ++next_solve_request_id_;
-    pending_solves_.push_back(PendingSolve{
-        request_id,
-        nowSeconds(),
-        false,
-        std::async(std::launch::async,
-                   [this, request_id, initial_state, reference_trajectory,
-                    initial_state_guess, initial_control_guess, landing_mode,
-                    reference_target_enu]() {
-                     return solveMPC(request_id, initial_state, reference_trajectory,
-                                     initial_state_guess, initial_control_guess,
-                                     reference_target_enu, landing_mode);
-                   }),
-    });
+    queueSolveRequest(SolverRequest{request_id,
+                                    nowSeconds(),
+                                    initial_state,
+                                    reference_trajectory,
+                                    initial_state_guess,
+                                    initial_control_guess,
+                                    reference_target_enu,
+                                    landing_mode});
   }
 
   void updateMode() {
@@ -829,13 +1038,16 @@ private:
     result.command = hoverCommand(landing_mode ? landing_descent_rate_mps_ : 0.0);
 
     try {
-      auto solver = createSolver(reference_trajectory, reference_target_enu);
-      solver->setInitialState(initial_state);
-      solver->setReferenceState(reference_trajectory.states.back());
-      solver->setReferenceStates(reference_trajectory.states);
-      solver->setInitialTrajectory(initial_state_guess, initial_control_guess);
+      configureSolverBackend(SolverRequest{request_id,
+                                           0.0,
+                                           initial_state,
+                                           reference_trajectory,
+                                           initial_state_guess,
+                                           initial_control_guess,
+                                           reference_target_enu,
+                                           landing_mode});
 
-      const cddp::CDDPSolution solution = solver->solve(solver_type_);
+      const cddp::CDDPSolution solution = solver_backend_->solve(solver_type_);
       result.status_message = solution.status_message;
       result.converged = solution.status_message == "OptimalSolutionFound" ||
                          solution.status_message == "AcceptableSolutionFound";
@@ -901,11 +1113,35 @@ private:
     return result;
   }
 
-  std::unique_ptr<cddp::CDDP> createSolver(
-      const ReferenceTrajectory &reference_trajectory,
-      const Eigen::Vector3d &setpoint_enu) const {
+  cddp::CDDPOptions buildSolverOptions() const {
+    cddp::CDDPOptions options;
+    const int effective_max_iterations =
+        realtime_mode_ ? std::min(std::max(1, max_iterations_),
+                                  std::max(1, rti_max_iterations_))
+                       : std::max(1, max_iterations_);
+    options.max_iterations = effective_max_iterations;
+    options.tolerance = 1e-4;
+    options.acceptable_tolerance = 1e-3;
+    options.max_cpu_time = solve_budget_ms_ / 1000.0;
+    options.verbose = false;
+    options.debug = false;
+    options.print_solver_header = false;
+    options.warm_start = true;
+    options.regularization.initial_value = 1e-3;
+    options.msipddp.segment_length = std::max(1, horizon_steps_ / 4);
+    options.msipddp.rollout_type = "nonlinear";
+    return options;
+  }
+
+  void initializeSolverBackend(const ReferenceTrajectory &reference_trajectory,
+                               const Eigen::Vector3d &setpoint_enu) {
+    if (solver_backend_) {
+      return;
+    }
+
     auto system = std::make_unique<cddp_mpc::ErrorStateEnuQuadrotorThrust>(
         mpc_dt_, mass_kg_, inertiaMatrix(), arm_length_m_, setpoint_enu, "rk4");
+    solver_system_ = system.get();
 
     const int state_dim = 13;
     const int control_dim = 4;
@@ -936,23 +1172,12 @@ private:
     auto objective = std::make_unique<TrackingQuadraticObjective>(
         Q, R, Qf, reference_trajectory.states.back(), reference_trajectory.states,
         reference_trajectory.controls, mpc_dt_);
+    solver_objective_ = objective.get();
 
-    cddp::CDDPOptions options;
-    options.max_iterations = std::max(1, max_iterations_);
-    options.tolerance = 1e-4;
-    options.acceptable_tolerance = 1e-3;
-    options.max_cpu_time = solve_timeout_ms_ / 1000.0;
-    options.verbose = false;
-    options.debug = false;
-    options.print_solver_header = false;
-    options.warm_start = true;
-    options.regularization.initial_value = 1e-3;
-    options.msipddp.segment_length = std::max(1, horizon_steps_ / 4);
-    options.msipddp.rollout_type = "nonlinear";
-
-    auto solver = std::make_unique<cddp::CDDP>(
+    solver_backend_ = std::make_unique<cddp::CDDP>(
         reference_trajectory.states.back(), reference_trajectory.states.back(),
-        horizon_steps_, mpc_dt_, std::move(system), std::move(objective), options);
+        horizon_steps_, mpc_dt_, std::move(system), std::move(objective),
+        buildSolverOptions());
 
     const double min_collective_thrust_n =
         std::max(min_thrust_n_, 4.0 * min_motor_thrust_n_);
@@ -965,14 +1190,26 @@ private:
     Eigen::VectorXd upper_bound(control_dim);
     upper_bound << max_collective_thrust_n, max_roll_torque_nm_, max_pitch_torque_nm_,
         max_yaw_torque_nm_;
-    solver->addPathConstraint(
+    solver_backend_->addPathConstraint(
         "control_bounds",
         std::make_unique<cddp::ControlConstraint>(lower_bound, upper_bound));
-    solver->addPathConstraint(
+    solver_backend_->addPathConstraint(
         "motor_allocation_bounds",
         std::make_unique<cddp_mpc::ThrustAllocationConstraint>(
             arm_length_m_, min_motor_thrust_n_, max_motor_thrust_n_));
-    return solver;
+  }
+
+  void configureSolverBackend(const SolverRequest &request) {
+    initializeSolverBackend(request.reference_trajectory, request.reference_target_enu);
+    solver_backend_->setOptions(buildSolverOptions());
+    solver_system_->setSetpointEnu(request.reference_target_enu);
+    solver_objective_->setReferenceTrajectory(request.reference_trajectory.states,
+                                              request.reference_trajectory.controls);
+    solver_backend_->setInitialState(request.initial_state);
+    solver_backend_->setReferenceState(request.reference_trajectory.states.back());
+    solver_backend_->setReferenceStates(request.reference_trajectory.states);
+    solver_backend_->setInitialTrajectory(request.initial_state_guess,
+                                          request.initial_control_guess);
   }
 
   Eigen::VectorXd
@@ -995,9 +1232,45 @@ private:
     return state;
   }
 
+  double currentYawEnu() const {
+    if (!current_attitude_ned_.has_value()) {
+      return target_yaw_rad_;
+    }
+    return yawFromQuaternionEnu(cddp_mpc::quatNedToEnuWxyz(*current_attitude_ned_));
+  }
+
   ReferenceTrajectory buildReferenceTrajectory(
       const Eigen::VectorXd &initial_state) const {
-    return reference_provider_->build(initial_state);
+    cddp_mpc::PositionYawReferenceProvider provider(buildReferenceConfig());
+    return provider.build(initial_state);
+  }
+
+  Eigen::Vector3d currentMissionTargetEnu() const {
+    if (reference_mode_ == "configured_target") {
+      return Eigen::Vector3d(target_x_m_, target_y_m_, target_z_m_);
+    }
+    if (setpoint_enu_.has_value()) {
+      return *setpoint_enu_;
+    }
+    return Eigen::Vector3d(target_x_m_, target_y_m_, target_z_m_);
+  }
+
+  void updateReferenceManager() {
+    if (!reference_manager_ || !current_position_ned_.has_value() ||
+        !current_attitude_ned_.has_value()) {
+      return;
+    }
+
+    reference_manager_->setConfig(buildReferenceManagerConfig());
+
+    cddp_mpc::MissionReference mission_reference;
+    mission_reference.mode = mode_;
+    mission_reference.target_position_enu = currentMissionTargetEnu();
+    mission_reference.target_yaw_rad = target_yaw_rad_;
+
+    active_reference_status_ = reference_manager_->update(
+        nowSeconds(), cddp_mpc::nedToEnu(*current_position_ned_), currentYawEnu(),
+        mission_reference);
   }
 
   std::vector<Eigen::VectorXd>
@@ -1257,17 +1530,46 @@ private:
     config.hover_thrust_n = hover_thrust_n_;
     config.min_thrust_n = min_thrust_n_;
     config.max_thrust_n = max_thrust_n_;
-    config.max_axis_speed_mps = reference_max_climb_rate_mps_;
-    config.max_axis_accel_mps2 = reference_max_climb_accel_mps2_;
+    config.max_axis_speed_mps =
+        std::max(reference_max_xy_speed_mps_, reference_max_climb_rate_mps_);
+    config.max_axis_accel_mps2 =
+        std::max(reference_max_xy_accel_mps2_, reference_max_climb_accel_mps2_);
     config.max_yaw_rate_rad_s = reference_max_yaw_rate_rad_s_;
     config.smoothing_tau_s = reference_smoothing_tau_s_;
-    config.target_yaw_rad = target_yaw_rad_;
+    config.target_yaw_rad = active_reference_status_.has_value()
+                                ? active_reference_status_->target_yaw_rad
+                                : target_yaw_rad_;
     config.trajectory_period_s = reference_trajectory_period_s_;
     config.circle_radius_m = reference_circle_radius_m_;
     config.figure_eight_amplitude_m = reference_figure_eight_amplitude_m_;
     config.vertical_amplitude_m = reference_vertical_amplitude_m_;
     config.allow_reference_jump = reference_allow_jump_;
-    config.mode = reference_mode_;
+    config.mode =
+        (active_reference_status_.has_value() &&
+         active_reference_status_->source != cddp_mpc::ReferenceSource::Mission)
+            ? "active_setpoint"
+            : reference_mode_;
+    return config;
+  }
+
+  cddp_mpc::ReferenceManagerConfig buildReferenceManagerConfig() const {
+    cddp_mpc::ReferenceManagerConfig config;
+    config.smoothing_tau_s = reference_smoothing_tau_s_;
+    config.max_xy_speed_mps = reference_max_xy_speed_mps_;
+    config.max_z_speed_mps = reference_max_climb_rate_mps_;
+    config.max_xy_accel_mps2 = reference_max_xy_accel_mps2_;
+    config.max_z_accel_mps2 = reference_max_climb_accel_mps2_;
+    config.max_yaw_rate_rad_s = reference_max_yaw_rate_rad_s_;
+    config.teleop_timeout_s = teleop_timeout_s_;
+    config.teleop_max_xy_speed_mps = teleop_max_xy_speed_mps_;
+    config.teleop_max_z_speed_mps = teleop_max_z_speed_mps_;
+    config.teleop_max_yaw_rate_rad_s = teleop_max_yaw_rate_rad_s_;
+    config.teleop_require_deadman = teleop_require_deadman_;
+    config.goal_timeout_s = goal_timeout_s_;
+    config.geofence_half_extent_x_m = geofence_half_extent_x_m_;
+    config.geofence_half_extent_y_m = geofence_half_extent_y_m_;
+    config.geofence_min_z_m = geofence_min_z_m_;
+    config.geofence_max_z_m = geofence_max_z_m_;
     return config;
   }
 
@@ -1284,17 +1586,10 @@ private:
   }
 
   Eigen::Vector3d currentReferenceTargetEnu() const {
-    if (reference_mode_ == "configured_target") {
-      return Eigen::Vector3d(target_x_m_, target_y_m_, target_z_m_);
+    if (active_reference_status_.has_value()) {
+      return active_reference_status_->target_position_enu;
     }
-    if ((mode_ == "TAKEOFF" || mode_ == "HOVER" || mode_ == "LAND") &&
-        setpoint_enu_.has_value()) {
-      return *setpoint_enu_;
-    }
-    if (setpoint_enu_.has_value()) {
-      return *setpoint_enu_;
-    }
-    return Eigen::Vector3d(target_x_m_, target_y_m_, target_z_m_);
+    return currentMissionTargetEnu();
   }
 
   void updateIndiMeasurement(double timestamp_s, const Eigen::Vector3d &body_rates,
@@ -1483,25 +1778,84 @@ private:
         yaw_moment_coefficient_);
   }
 
-  void pollSolveResult() {
-    bool has_overrun_pending = false;
-    auto it = pending_solves_.begin();
-    while (it != pending_solves_.end()) {
-      if (it->future.wait_for(0ms) != std::future_status::ready) {
-        const double age_ms = (nowSeconds() - it->start_time_s) * 1000.0;
-        if (age_ms > solve_timeout_ms_ && !it->timeout_reported) {
-          it->timeout_reported = true;
-          ++solve_timeout_count_;
-          has_overrun_pending = true;
-        } else if (age_ms > solve_timeout_ms_) {
-          ++solve_overrun_count_;
-          has_overrun_pending = true;
+  void queueSolveRequest(SolverRequest request) {
+    std::lock_guard<std::mutex> lock(solver_mutex_);
+    latest_solver_request_ = std::move(request);
+    solver_cv_.notify_one();
+  }
+
+  void stopSolverWorker() {
+    {
+      std::lock_guard<std::mutex> lock(solver_mutex_);
+      stop_solver_worker_ = true;
+      solver_cv_.notify_one();
+    }
+    if (solver_thread_.joinable()) {
+      solver_thread_.join();
+    }
+  }
+
+  void solverWorkerLoop() {
+    while (true) {
+      SolverRequest request;
+      {
+        std::unique_lock<std::mutex> lock(solver_mutex_);
+        solver_cv_.wait(lock, [this]() {
+          return stop_solver_worker_ || latest_solver_request_.has_value();
+        });
+        if (stop_solver_worker_) {
+          return;
         }
-        ++it;
-        continue;
+        request = std::move(*latest_solver_request_);
+        latest_solver_request_.reset();
+        solver_active_request_id_ = request.request_id;
+        solver_active_request_start_time_s_ = nowSeconds();
+        solver_active_timeout_reported_ = false;
+        solver_busy_ = true;
       }
 
-      SolveResult result = it->future.get();
+      CompletedSolve completed;
+      completed.start_time_s = solver_active_request_start_time_s_;
+      completed.reference_target_enu = request.reference_target_enu;
+      completed.result =
+          solveMPC(request.request_id, request.initial_state, request.reference_trajectory,
+                   request.initial_state_guess, request.initial_control_guess,
+                   request.reference_target_enu, request.landing_mode);
+      completed.completion_time_s = nowSeconds();
+      completed.overran_budget =
+          (completed.completion_time_s - completed.start_time_s) * 1000.0 >
+          solve_budget_ms_;
+
+      {
+        std::lock_guard<std::mutex> lock(solver_mutex_);
+        latest_completed_solve_ = std::move(completed);
+        solver_busy_ = false;
+        solver_active_request_id_ = 0;
+      }
+    }
+  }
+
+  void pollSolveResult() {
+    std::optional<CompletedSolve> completed;
+    {
+      std::lock_guard<std::mutex> lock(solver_mutex_);
+      if (latest_completed_solve_.has_value()) {
+        completed = std::move(latest_completed_solve_);
+        latest_completed_solve_.reset();
+      }
+      if (solver_busy_) {
+        const double age_ms = (nowSeconds() - solver_active_request_start_time_s_) * 1000.0;
+        if (age_ms > solve_budget_ms_) {
+          if (!solver_active_timeout_reported_) {
+            solver_active_timeout_reported_ = true;
+            ++solve_timeout_count_;
+          }
+        }
+      }
+    }
+
+    if (completed.has_value()) {
+      const SolveResult &result = completed->result;
       ++solve_count_;
       if (result.request_id > latest_applied_request_id_) {
         latest_applied_request_id_ = result.request_id;
@@ -1513,28 +1867,30 @@ private:
         last_solve_time_ms_ = result.solve_time_ms;
         last_max_constraint_violation_ = result.max_constraint_violation;
         last_raw_bound_violation_ = result.raw_bound_violation;
+        if (completed->overran_budget) {
+          ++solve_overrun_count_;
+          ++consecutive_overrun_cycles_;
+        } else {
+          consecutive_overrun_cycles_ = 0;
+        }
         if (result.success) {
           last_good_command_ = result.command;
-          last_solve_wall_time_s_ = it->start_time_s;
+          last_solve_wall_time_s_ = completed->completion_time_s;
           solve_fail_streak_ = 0;
-          consecutive_overrun_cycles_ = 0;
           last_planned_control_trajectory_ = result.control_trajectory;
+          last_planned_state_trajectory_ = result.state_trajectory;
+          last_planned_reference_target_enu_ = completed->reference_target_enu;
           std::lock_guard<std::mutex> lock(warm_start_mutex_);
           previous_state_guess_ = shiftStateTrajectory(result.state_trajectory);
           previous_control_guess_ = shiftControlTrajectory(result.control_trajectory);
         } else {
           ++solve_fail_streak_;
           last_planned_control_trajectory_.clear();
+          last_planned_state_trajectory_.clear();
           RCLCPP_WARN(get_logger(), "CDDP solve failed: %s",
                       result.status_message.c_str());
         }
       }
-      it = pending_solves_.erase(it);
-    }
-    if (has_overrun_pending) {
-      ++consecutive_overrun_cycles_;
-    } else {
-      consecutive_overrun_cycles_ = 0;
     }
   }
 
@@ -1572,6 +1928,91 @@ private:
     vehicle_torque_pub_->publish(torque_msg);
   }
 
+  void publishReferenceVisualization() {
+    if (!active_reference_status_.has_value()) {
+      return;
+    }
+
+    const auto stamp = get_clock()->now();
+
+    PoseStamped goal_msg{};
+    goal_msg.header.stamp = stamp;
+    goal_msg.header.frame_id = "map";
+    goal_msg.pose.position.x = active_reference_status_->target_position_enu.x();
+    goal_msg.pose.position.y = active_reference_status_->target_position_enu.y();
+    goal_msg.pose.position.z = active_reference_status_->target_position_enu.z();
+    const Eigen::Quaterniond goal_q =
+        cddp_mpc::quaternionFromYaw(active_reference_status_->target_yaw_rad);
+    goal_msg.pose.orientation.w = goal_q.w();
+    goal_msg.pose.orientation.x = goal_q.x();
+    goal_msg.pose.orientation.y = goal_q.y();
+    goal_msg.pose.orientation.z = goal_q.z();
+    active_goal_pub_->publish(goal_msg);
+
+    Path predicted_path{};
+    predicted_path.header = goal_msg.header;
+    predicted_path.poses.reserve(last_planned_state_trajectory_.size());
+    for (const auto &state : last_planned_state_trajectory_) {
+      if (state.size() < 13) {
+        continue;
+      }
+      PoseStamped pose{};
+      pose.header = goal_msg.header;
+      pose.pose.position.x = last_planned_reference_target_enu_.x() + state(0);
+      pose.pose.position.y = last_planned_reference_target_enu_.y() + state(1);
+      pose.pose.position.z = last_planned_reference_target_enu_.z() + state(2);
+      pose.pose.orientation.w = state(3);
+      pose.pose.orientation.x = state(4);
+      pose.pose.orientation.y = state(5);
+      pose.pose.orientation.z = state(6);
+      predicted_path.poses.push_back(std::move(pose));
+    }
+    predicted_path_pub_->publish(predicted_path);
+
+    Marker geofence{};
+    geofence.header = goal_msg.header;
+    geofence.ns = "cddp_mpc";
+    geofence.id = 0;
+    geofence.type = Marker::CUBE;
+    geofence.action = Marker::ADD;
+    geofence.pose.orientation.w = 1.0;
+    geofence.pose.position.z = 0.5 * (geofence_min_z_m_ + geofence_max_z_m_);
+    geofence.scale.x = 2.0 * geofence_half_extent_x_m_;
+    geofence.scale.y = 2.0 * geofence_half_extent_y_m_;
+    geofence.scale.z = std::max(0.05, geofence_max_z_m_ - geofence_min_z_m_);
+    geofence.color.a = 0.12F;
+    geofence.color.r = 0.1F;
+    geofence.color.g = 0.6F;
+    geofence.color.b = 1.0F;
+    geofence_marker_pub_->publish(geofence);
+
+    Marker safety_text{};
+    safety_text.header = goal_msg.header;
+    safety_text.ns = "cddp_mpc";
+    safety_text.id = 1;
+    safety_text.type = Marker::TEXT_VIEW_FACING;
+    safety_text.action = Marker::ADD;
+    safety_text.scale.z = 0.25;
+    safety_text.color.a = 1.0F;
+    safety_text.color.r = 1.0F;
+    safety_text.color.g = 1.0F;
+    safety_text.color.b = 1.0F;
+    if (current_position_ned_.has_value()) {
+      const Eigen::Vector3d position_enu = cddp_mpc::nedToEnu(*current_position_ned_);
+      safety_text.pose.position.x = position_enu.x();
+      safety_text.pose.position.y = position_enu.y();
+      safety_text.pose.position.z = position_enu.z() + 0.8;
+    } else {
+      safety_text.pose.position = goal_msg.pose.position;
+      safety_text.pose.position.z += 0.8;
+    }
+    safety_text.pose.orientation.w = 1.0;
+    safety_text.text = "mode=" + mode_ + " ref=" + active_reference_status_->source_label +
+                       " solve=" + formatDouble(last_solve_time_ms_, 1) +
+                       "ms status=" + last_status_message_;
+    safety_text_pub_->publish(safety_text);
+  }
+
   void publishVehicleCommand(uint16_t command, float param1 = 0.0F,
                              float param2 = 0.0F) {
     VehicleCommand msg{};
@@ -1579,10 +2020,10 @@ private:
     msg.param1 = param1;
     msg.param2 = param2;
     msg.command = command;
-    msg.target_system = 1;
-    msg.target_component = 1;
-    msg.source_system = 1;
-    msg.source_component = 1;
+    msg.target_system = static_cast<uint8_t>(target_system_);
+    msg.target_component = static_cast<uint8_t>(target_component_);
+    msg.source_system = static_cast<uint8_t>(source_system_);
+    msg.source_component = static_cast<uint8_t>(source_component_);
     msg.from_external = true;
     vehicle_command_pub_->publish(msg);
   }
@@ -1735,7 +2176,7 @@ private:
 
   std::vector<KeyValue> buildDiagnosticValues() const {
     std::vector<KeyValue> values;
-    values.reserve(40);
+    values.reserve(56);
     const double current_z_ned =
         current_position_ned_.has_value() ? current_position_ned_->z() : std::numeric_limits<double>::quiet_NaN();
     const double current_vz_ned =
@@ -1839,6 +2280,35 @@ private:
     push("setpoint_enu_x_m", setpoint_enu_.has_value() ? formatDouble((*setpoint_enu_)(0)) : "nan");
     push("setpoint_enu_y_m", setpoint_enu_.has_value() ? formatDouble((*setpoint_enu_)(1)) : "nan");
     push("setpoint_enu_z_m", setpoint_enu_.has_value() ? formatDouble((*setpoint_enu_)(2)) : "nan");
+    push("active_reference_source",
+         active_reference_status_.has_value() ? active_reference_status_->source_label
+                                              : "uninitialized");
+    push("active_target_enu_x_m", formatDouble(currentReferenceTargetEnu().x()));
+    push("active_target_enu_y_m", formatDouble(currentReferenceTargetEnu().y()));
+    push("active_target_enu_z_m", formatDouble(currentReferenceTargetEnu().z()));
+    push("active_target_yaw_rad",
+         formatDouble(active_reference_status_.has_value()
+                          ? active_reference_status_->target_yaw_rad
+                          : target_yaw_rad_));
+    push("teleop_active",
+         active_reference_status_.has_value() && active_reference_status_->teleop_active
+             ? "true"
+             : "false");
+    push("teleop_deadman_pressed",
+         active_reference_status_.has_value() &&
+                 active_reference_status_->teleop_deadman_pressed
+             ? "true"
+             : "false");
+    push("goal_fresh",
+         active_reference_status_.has_value() && active_reference_status_->goal_fresh
+             ? "true"
+             : "false");
+    push("geofence_clamped",
+         active_reference_status_.has_value() &&
+                 active_reference_status_->geofence_clamped
+             ? "true"
+             : "false");
+    push("solve_budget_ms", formatDouble(solve_budget_ms_));
     push("solver_cmd_thrust_n", formatDouble(solver_cmd_thrust));
     push("published_cmd_thrust_n", formatDouble(published_cmd_thrust));
     push("solver_cmd_tau_x_nm", formatDouble(solver_cmd_torque.x()));
@@ -1952,6 +2422,8 @@ private:
   double terminal_tilt_weight_{8.0};
   double reference_max_climb_rate_mps_{1.0};
   double reference_max_climb_accel_mps2_{1.5};
+  double reference_max_xy_speed_mps_{1.0};
+  double reference_max_xy_accel_mps2_{1.5};
   double reference_max_yaw_rate_rad_s_{0.6};
   double reference_smoothing_tau_s_{0.6};
   double reference_trajectory_period_s_{8.0};
@@ -1964,10 +2436,50 @@ private:
   double target_x_m_{0.0};
   double target_y_m_{0.0};
   double target_z_m_{-3.0};
+  std::string fmu_prefix_{"/fmu"};
+  std::string controller_prefix_{"/cddp_mpc"};
+  int target_system_{1};
+  int target_component_{1};
+  int source_system_{1};
+  int source_component_{1};
+  std::string local_position_topic_{"/fmu/out/vehicle_local_position"};
+  std::string odometry_topic_{"/fmu/out/vehicle_odometry"};
+  std::string attitude_topic_{"/fmu/out/vehicle_attitude"};
+  std::string vehicle_status_topic_{"/fmu/out/vehicle_status"};
+  std::string angular_velocity_topic_{"/fmu/out/vehicle_angular_velocity"};
+  std::string offboard_control_mode_topic_{"/fmu/in/offboard_control_mode"};
+  std::string vehicle_thrust_setpoint_topic_{"/fmu/in/vehicle_thrust_setpoint"};
+  std::string vehicle_torque_setpoint_topic_{"/fmu/in/vehicle_torque_setpoint"};
+  std::string vehicle_command_topic_{"/fmu/in/vehicle_command"};
+  std::string status_topic_{"/cddp_mpc/status"};
+  std::string active_goal_topic_{"/cddp_mpc/active_goal"};
+  std::string predicted_path_topic_{"/cddp_mpc/predicted_path"};
+  std::string geofence_topic_{"/cddp_mpc/geofence"};
+  std::string safety_text_topic_{"/cddp_mpc/safety_text"};
+  std::string start_mission_service_name_{"/cddp_mpc/start_mission"};
+  std::string teleop_topic_{"/teleop/cmd_vel"};
+  std::string joy_topic_{"/joy"};
+  std::string teleop_frame_{"body"};
+  double teleop_timeout_s_{0.2};
+  bool teleop_require_deadman_{true};
+  int teleop_deadman_button_index_{4};
+  double teleop_max_xy_speed_mps_{1.0};
+  double teleop_max_z_speed_mps_{0.6};
+  double teleop_max_yaw_rate_rad_s_{0.8};
+  std::string goal_pose_topic_{"/cddp_mpc/goal_pose"};
+  std::string goal_pose_frame_{"map"};
+  double goal_timeout_s_{1.0};
+  double geofence_half_extent_x_m_{5.0};
+  double geofence_half_extent_y_m_{5.0};
+  double geofence_min_z_m_{0.0};
+  double geofence_max_z_m_{5.0};
 
   int max_iterations_{8};
+  bool realtime_mode_{true};
+  int rti_max_iterations_{5};
   double constraint_tolerance_{0.5};
   double solve_timeout_ms_{450.0};
+  double solve_budget_ms_{450.0};
   double takeoff_min_thrust_margin_n_{1.0};
   double min_flight_thrust_ratio_{0.55};
   double hover_min_thrust_ratio_{1.0};
@@ -2002,6 +2514,7 @@ private:
   std::optional<double> landing_start_time_s_;
   std::optional<double> landing_start_setpoint_z_ned_;
   std::optional<double> latest_reference_thrust_n_;
+  std::optional<cddp_mpc::ReferenceStatus> active_reference_status_;
 
   bool mission_start_requested_{true};
   bool armed_{false};
@@ -2039,19 +2552,36 @@ private:
   double last_plan_age_s_{std::numeric_limits<double>::quiet_NaN()};
   bool stale_plan_rejected_this_cycle_{false};
   bool overrun_hover_active_{false};
+  std::vector<Eigen::VectorXd> last_planned_state_trajectory_;
   std::vector<Eigen::VectorXd> last_planned_control_trajectory_;
+  Eigen::Vector3d last_planned_reference_target_enu_{Eigen::Vector3d::Zero()};
 
   std::optional<std::vector<Eigen::VectorXd>> previous_state_guess_;
   std::optional<std::vector<Eigen::VectorXd>> previous_control_guess_;
   mutable std::mutex warm_start_mutex_;
-  std::vector<PendingSolve> pending_solves_;
   std::uint64_t next_solve_request_id_{0};
   std::uint64_t latest_applied_request_id_{0};
+  std::mutex solver_mutex_;
+  std::condition_variable solver_cv_;
+  std::thread solver_thread_;
+  bool stop_solver_worker_{false};
+  bool solver_busy_{false};
+  bool solver_active_timeout_reported_{false};
+  double solver_active_request_start_time_s_{0.0};
+  std::uint64_t solver_active_request_id_{0};
+  std::optional<SolverRequest> latest_solver_request_;
+  std::optional<CompletedSolve> latest_completed_solve_;
+  std::unique_ptr<cddp::CDDP> solver_backend_;
+  cddp_mpc::ErrorStateEnuQuadrotorThrust *solver_system_{nullptr};
+  TrackingQuadraticObjective *solver_objective_{nullptr};
 
   rclcpp::Subscription<VehicleLocalPosition>::SharedPtr local_position_sub_;
   rclcpp::Subscription<VehicleOdometry>::SharedPtr odometry_sub_;
   rclcpp::Subscription<VehicleAttitude>::SharedPtr attitude_sub_;
   rclcpp::Subscription<VehicleStatus>::SharedPtr vehicle_status_sub_;
+  rclcpp::Subscription<TwistStamped>::SharedPtr teleop_sub_;
+  rclcpp::Subscription<Joy>::SharedPtr joy_sub_;
+  rclcpp::Subscription<PoseStamped>::SharedPtr goal_pose_sub_;
 #if CDDP_MPC_HAS_VEHICLE_ANGULAR_VELOCITY
   rclcpp::Subscription<VehicleAngularVelocity>::SharedPtr angular_velocity_sub_;
 #endif
@@ -2061,6 +2591,10 @@ private:
   rclcpp::Publisher<VehicleTorqueSetpoint>::SharedPtr vehicle_torque_pub_;
   rclcpp::Publisher<VehicleCommand>::SharedPtr vehicle_command_pub_;
   rclcpp::Publisher<DiagnosticArray>::SharedPtr diagnostic_pub_;
+  rclcpp::Publisher<PoseStamped>::SharedPtr active_goal_pub_;
+  rclcpp::Publisher<Path>::SharedPtr predicted_path_pub_;
+  rclcpp::Publisher<Marker>::SharedPtr geofence_marker_pub_;
+  rclcpp::Publisher<Marker>::SharedPtr safety_text_pub_;
 
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_mission_service_;
 
@@ -2069,6 +2603,7 @@ private:
   rclcpp::TimerBase::SharedPtr offboard_timer_;
 
   std::unique_ptr<cddp_mpc::ReferenceProvider> reference_provider_;
+  std::unique_ptr<cddp_mpc::ReferenceManager> reference_manager_;
   std::unique_ptr<cddp_mpc::IndiRotationalCompensator> rotational_indi_;
   cddp_mpc::IndiRotationalCompensator::Status default_indi_status_{};
   std::string latest_rate_measurement_source_{"none"};

@@ -15,9 +15,39 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
 
+def _clean_namespace(value: str) -> str:
+    return value.strip().strip("/")
+
+
+def _normalize_prefix(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    if value != "/":
+        value = value.rstrip("/")
+    return value
+
+
+def _default_prefix(namespace: str, explicit_prefix: str, leaf: str) -> str:
+    explicit_prefix = _normalize_prefix(explicit_prefix)
+    if explicit_prefix:
+        return explicit_prefix
+    if namespace:
+        return f"/{namespace}/{leaf}"
+    return f"/{leaf}"
+
+
 def _build_control_actions(context, *args, **kwargs):
     del args, kwargs
     control_mode = LaunchConfiguration("control_mode").perform(context).strip().lower()
+    namespace = _clean_namespace(LaunchConfiguration("namespace").perform(context))
+    fmu_prefix = _default_prefix(
+        namespace, LaunchConfiguration("fmu_prefix").perform(context), "fmu"
+    )
+    controller_prefix = _default_prefix(
+        namespace, LaunchConfiguration("controller_prefix").perform(context), "cddp_mpc"
+    )
+    start_service = f"{controller_prefix}/start_mission"
     package_share = FindPackageShare("cddp_mpc").perform(context)
     offboard_launch = PathJoinSubstitution([package_share, "launch", "mpc_offboard.launch.py"])
 
@@ -27,12 +57,22 @@ def _build_control_actions(context, *args, **kwargs):
             LogInfo(
                 msg=(
                     "When ready, start the mission with: "
-                    "ros2 service call /cddp_mpc/start_mission std_srvs/srv/Trigger {}"
+                    f"ros2 service call {start_service} std_srvs/srv/Trigger {{}}"
                 )
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(offboard_launch),
-                launch_arguments={"params_file": LaunchConfiguration("params_file")}.items(),
+                launch_arguments={
+                    "params_file": LaunchConfiguration("params_file"),
+                    "namespace": LaunchConfiguration("namespace"),
+                    "fmu_prefix": fmu_prefix,
+                    "controller_prefix": controller_prefix,
+                    "visualizer_prefix": LaunchConfiguration("visualizer_prefix"),
+                    "target_system": LaunchConfiguration("target_system"),
+                    "target_component": LaunchConfiguration("target_component"),
+                    "source_system": LaunchConfiguration("source_system"),
+                    "source_component": LaunchConfiguration("source_component"),
+                }.items(),
             ),
         ]
 
@@ -57,11 +97,22 @@ def _build_validator_notice(context, *args, **kwargs):
     if launch_validator not in {"1", "true", "yes", "on"}:
         return []
 
+    namespace = _clean_namespace(LaunchConfiguration("namespace").perform(context))
+    fmu_prefix = _default_prefix(
+        namespace, LaunchConfiguration("fmu_prefix").perform(context), "fmu"
+    )
+    controller_prefix = _default_prefix(
+        namespace, LaunchConfiguration("controller_prefix").perform(context), "cddp_mpc"
+    )
     package_share = FindPackageShare("cddp_mpc").perform(context)
     validator_script = PathJoinSubstitution([package_share, "examples", "validate_takeoff_hover.py"])
     cmd = [
         "python3",
         validator_script,
+        "--fmu-prefix",
+        fmu_prefix,
+        "--controller-prefix",
+        controller_prefix,
         "--validation-mode",
         LaunchConfiguration("control_mode").perform(context),
         "--target-z",
@@ -124,6 +175,14 @@ def generate_launch_description():
                 default_value=default_params,
                 description="Path to the hardware ROS 2 parameter YAML for px4_mpc_node",
             ),
+            DeclareLaunchArgument("namespace", default_value=""),
+            DeclareLaunchArgument("fmu_prefix", default_value=""),
+            DeclareLaunchArgument("controller_prefix", default_value=""),
+            DeclareLaunchArgument("visualizer_prefix", default_value=""),
+            DeclareLaunchArgument("target_system", default_value="1"),
+            DeclareLaunchArgument("target_component", default_value="1"),
+            DeclareLaunchArgument("source_system", default_value="1"),
+            DeclareLaunchArgument("source_component", default_value="1"),
             DeclareLaunchArgument(
                 "control_mode",
                 default_value="offboard",

@@ -176,6 +176,18 @@ class CalibrateHoverMassTests(unittest.TestCase):
         self.assertTrue(node.done)
         self.assertIn("not enough steady hover samples", node.failure_reason)
 
+    def test_prefix_configuration_is_applied_to_subscriptions(self) -> None:
+        config = self.module.CalibrationConfig(
+            fmu_prefix="/px4_0/fmu",
+            controller_prefix="/px4_0/cddp_mpc",
+        )
+
+        node = self.module.HoverMassCalibrator(config)
+
+        topics = {record["topic"] for record in node.subscriptions}
+        self.assertIn("/px4_0/fmu/out/vehicle_status", topics)
+        self.assertIn("/px4_0/cddp_mpc/status", topics)
+
     def test_safe_float_handles_bad_values(self) -> None:
         value = self.module.HoverMassCalibrator._safe_float({"x": "bad"}, "x")
         self.assertTrue(math.isnan(value))
