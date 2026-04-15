@@ -15,8 +15,10 @@ class MultiVehicleLaunchDefaultsTest(unittest.TestCase):
 
         self.assertIn('DeclareLaunchArgument("vehicle_count", default_value="2")', text)
         self.assertIn('DeclareLaunchArgument("instance_start", default_value="0")', text)
+        self.assertIn('DeclareLaunchArgument("instance_spacing_m", default_value="2.0")', text)
         self.assertIn('"target_system": str(instance + 1)', text)
         self.assertIn('f"/{namespace}/fmu"', text)
+        self.assertIn('_write_generated_overlay(namespace, offset * instance_spacing_m)', text)
 
     def test_multi_simulation_launch_uses_px4_instance_namespaces(self) -> None:
         launch_path = (

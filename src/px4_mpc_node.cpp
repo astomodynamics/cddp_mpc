@@ -1937,7 +1937,7 @@ private:
 
     PoseStamped goal_msg{};
     goal_msg.header.stamp = stamp;
-    goal_msg.header.frame_id = "map";
+    goal_msg.header.frame_id = goal_pose_frame_;
     goal_msg.pose.position.x = active_reference_status_->target_position_enu.x();
     goal_msg.pose.position.y = active_reference_status_->target_position_enu.y();
     goal_msg.pose.position.z = active_reference_status_->target_position_enu.z();
