@@ -71,6 +71,7 @@ def _rewrite_rviz_config(source_path: str, controller_prefix: str, visualizer_pr
     text = Path(source_path).read_text()
     text = text.replace("/cddp_mpc", controller_prefix)
     text = text.replace("/px4_visualizer", visualizer_prefix)
+    text = text.replace("/goal_pose", f"{controller_prefix}/goal_pose")
     stem = controller_prefix.strip("/").replace("/", "_") or "default"
     destination = Path(tempfile.gettempdir()) / f"cddp_mpc_{stem}_rviz.rviz"
     destination.write_text(text)

@@ -803,8 +803,19 @@ private:
     const Eigen::Quaterniond orientation(
         msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y,
         msg->pose.orientation.z);
-    const Eigen::Vector3d position(msg->pose.position.x, msg->pose.position.y,
-                                   msg->pose.position.z);
+    Eigen::Vector3d position(msg->pose.position.x, msg->pose.position.y,
+                             msg->pose.position.z);
+    if (std::abs(position.z()) <= 1e-6) {
+      if (active_reference_status_.has_value()) {
+        position.z() = active_reference_status_->target_position_enu.z();
+      } else if (current_position_ned_.has_value()) {
+        position.z() = cddp_mpc::nedToEnu(*current_position_ned_).z();
+      } else if (setpoint_enu_.has_value()) {
+        position.z() = (*setpoint_enu_).z();
+      } else {
+        position.z() = target_z_m_;
+      }
+    }
     reference_manager_->updateGoalPose(nowSeconds(), position,
                                        yawFromQuaternionEnu(orientation));
   }

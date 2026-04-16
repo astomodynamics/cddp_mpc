@@ -65,4 +65,24 @@ TEST(ReferenceManagerTest, TeleopOverridesMissionWhenDeadmanPressed) {
   EXPECT_GT(status.target_position_enu.x(), 0.0);
 }
 
+TEST(ReferenceManagerTest, OneShotGoalRemainsActiveAfterFreshnessWindow) {
+  cddp_mpc::ReferenceManagerConfig config;
+  config.goal_timeout_s = 1.0;
+  cddp_mpc::ReferenceManager manager(config);
+
+  manager.updateGoalPose(1.0, Eigen::Vector3d(2.0, 3.0, 4.0), 0.5);
+
+  cddp_mpc::MissionReference mission;
+  mission.target_position_enu = Eigen::Vector3d(-1.0, -1.0, -1.0);
+  manager.update(1.0, Eigen::Vector3d::Zero(), 0.0, mission);
+  const cddp_mpc::ReferenceStatus status =
+      manager.update(3.0, Eigen::Vector3d::Zero(), 0.0, mission);
+
+  EXPECT_EQ(status.source, cddp_mpc::ReferenceSource::GoalPose);
+  EXPECT_FALSE(status.goal_fresh);
+  EXPECT_DOUBLE_EQ(status.target_position_enu.x(), 2.0);
+  EXPECT_DOUBLE_EQ(status.target_position_enu.y(), 3.0);
+  EXPECT_DOUBLE_EQ(status.target_position_enu.z(), 4.0);
+}
+
 } // namespace

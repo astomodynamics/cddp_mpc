@@ -110,6 +110,7 @@ ReferenceStatus ReferenceManager::update(double time_s,
   const bool goal_fresh = latest_goal_pose_.has_value() &&
                           (time_s - latest_goal_pose_->time_s) <=
                               std::max(config_.goal_timeout_s, 0.0);
+  const bool goal_active = latest_goal_pose_.has_value();
 
   const double dt_s = last_update_time_s_.has_value()
                           ? std::clamp(time_s - *last_update_time_s_, 0.0, 0.5)
@@ -128,7 +129,7 @@ ReferenceStatus ReferenceManager::update(double time_s,
     const double yaw_origin = initialized_ ? active_target_yaw_rad_ : current_yaw_rad;
     desired_yaw_rad = wrapAngle(
         yaw_origin + latest_teleop_command_->yaw_rate_rad_s * dt_s);
-  } else if (goal_fresh) {
+  } else if (goal_active) {
     source = ReferenceSource::GoalPose;
     desired_position_enu = latest_goal_pose_->position_enu;
     desired_yaw_rad = latest_goal_pose_->yaw_rad;
