@@ -109,7 +109,7 @@ private:
 
         // Set goal state to the last pose in the path
         int path_size = msg->poses.size();
-        if (path_size < goal_index_){
+        if (path_size <= goal_index_){
             goal_index_ = path_size - 1;
         }
         q = msg->poses[goal_index_].pose.orientation;
