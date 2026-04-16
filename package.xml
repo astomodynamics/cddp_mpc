@@ -13,7 +13,9 @@
   <depend>rclpy</depend>
   <depend>diagnostic_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>interactive_markers</depend>
   <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
   <depend>std_srvs</depend>
   <depend>px4_msgs</depend>
   <depend>visualization_msgs</depend>

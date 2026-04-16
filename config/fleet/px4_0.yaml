@@ -1,0 +1,13 @@
+cddp_mpc:
+  ros__parameters:
+    fmu_prefix: /px4_0/fmu
+    controller_prefix: /px4_0/cddp_mpc
+    target_system: 1
+    target_component: 1
+    source_system: 1
+    source_component: 1
+    teleop_topic: /px4_0/teleop/cmd_vel
+    joy_topic: /px4_0/joy
+    goal_pose_topic: /px4_0/cddp_mpc/goal_pose
+    target_x_m: 0.0
+    target_y_m: 0.0

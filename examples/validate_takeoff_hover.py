@@ -23,6 +23,8 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 @dataclass
 class ValidationConfig:
     validation_mode: str = "offboard"
+    fmu_prefix: str = "/fmu"
+    controller_prefix: str = "/cddp_mpc"
     target_z: float = -3.0
     settle_tolerance: float = 0.3
     hold_duration_sec: float = 0.0
@@ -82,29 +84,44 @@ class HoverMissionValidator(Node):
         self.solver_cmd_thrust = None
         self.published_cmd_thrust = None
 
+        fmu_prefix = self.config.fmu_prefix.rstrip("/") or "/fmu"
+        controller_prefix = self.config.controller_prefix.rstrip("/") or "/cddp_mpc"
+
         self.create_subscription(
-            VehicleOdometry, "/fmu/out/vehicle_odometry", self._odometry_callback, qos_profile
+            VehicleOdometry,
+            f"{fmu_prefix}/out/vehicle_odometry",
+            self._odometry_callback,
+            qos_profile,
         )
         self.create_subscription(
-            VehicleStatus, "/fmu/out/vehicle_status", self._status_callback, qos_profile
+            VehicleStatus,
+            f"{fmu_prefix}/out/vehicle_status",
+            self._status_callback,
+            qos_profile,
         )
         self.create_subscription(
-            OffboardControlMode, "/fmu/in/offboard_control_mode", self._offboard_mode_callback, qos_profile
+            OffboardControlMode,
+            f"{fmu_prefix}/in/offboard_control_mode",
+            self._offboard_mode_callback,
+            qos_profile,
         )
         self.create_subscription(
             VehicleThrustSetpoint,
-            "/fmu/in/vehicle_thrust_setpoint",
+            f"{fmu_prefix}/in/vehicle_thrust_setpoint",
             self._thrust_setpoint_callback,
             qos_profile,
         )
         self.create_subscription(
             VehicleTorqueSetpoint,
-            "/fmu/in/vehicle_torque_setpoint",
+            f"{fmu_prefix}/in/vehicle_torque_setpoint",
             self._torque_setpoint_callback,
             qos_profile,
         )
         self.create_subscription(
-            DiagnosticArray, "/cddp_mpc/status", self._diagnostic_callback, qos_profile
+            DiagnosticArray,
+            f"{controller_prefix}/status",
+            self._diagnostic_callback,
+            qos_profile,
         )
 
         self.create_timer(1.0, self._tick)
@@ -320,6 +337,8 @@ def parse_args() -> ValidationConfig:
     parser = argparse.ArgumentParser(
         description="Validate PX4 takeoff/hover/landing behavior for cddp_mpc."
     )
+    parser.add_argument("--fmu-prefix", type=str, default="/fmu")
+    parser.add_argument("--controller-prefix", type=str, default="/cddp_mpc")
     parser.add_argument("--validation-mode", choices=("offboard", "onboard"), default="offboard")
     parser.add_argument("--target-z", type=float, default=-3.0)
     parser.add_argument("--settle-tolerance", type=float, default=0.3)
@@ -343,6 +362,8 @@ def parse_args() -> ValidationConfig:
     args = parser.parse_args()
     return ValidationConfig(
         validation_mode=args.validation_mode,
+        fmu_prefix=args.fmu_prefix,
+        controller_prefix=args.controller_prefix,
         target_z=args.target_z,
         settle_tolerance=args.settle_tolerance,
         hold_duration_sec=args.hold_duration_sec,

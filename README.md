@@ -138,6 +138,49 @@ ros2 launch cddp_mpc mpc_offboard.launch.py
 ros2 launch cddp_mpc mpc_offboard.launch.py params_file:=/path/to/params.yaml
 ```
 
+### Running Multiple Quadrotors in SITL
+
+The repo now has fleet-oriented launch wrappers built on top of the single-vehicle
+controller path.
+
+Start a multi-vehicle PX4 SITL stack:
+
+```bash
+# Shell 1 inside the persistent dev container
+sb
+ros2 launch cddp_mpc multi_quadrotor_simulation.launch.py vehicle_count:=2
+```
+
+Start one controller per PX4 instance:
+
+```bash
+# Shell 2 inside the same container
+sb
+ros2 launch cddp_mpc multi_quadrotor_offboard.launch.py vehicle_count:=2
+```
+
+Default fleet conventions:
+
+- PX4 instance `0` uses ROS topics under `/px4_0/fmu` and controller topics under `/px4_0/cddp_mpc`
+- PX4 instance `1` uses `/px4_1/fmu` and `/px4_1/cddp_mpc`
+- each controller publishes `VehicleCommand` with `target_system = instance + 1`
+- per-vehicle overlays live in [`config/fleet`](config/fleet)
+
+Useful overrides:
+
+```bash
+# Launch RViz for only px4_0 while keeping both controllers running
+ros2 launch cddp_mpc multi_quadrotor_offboard.launch.py \
+  vehicle_count:=2 launch_rviz:=true rviz_instance:=0
+
+# Start controllers from a different base config
+ros2 launch cddp_mpc multi_quadrotor_offboard.launch.py \
+  vehicle_count:=3 params_file:=/path/to/base.yaml
+```
+
+The packaged RViz config is rewritten at launch time so the visualizer and goal
+topics point at the selected vehicle instance.
+
 When `launch_visualizer:=true` or `launch_rviz:=true`, the package starts
 `px4_visualizer`, which publishes:
 
@@ -147,9 +190,39 @@ When `launch_visualizer:=true` or `launch_rviz:=true`, the package starts
 - `/px4_visualizer/vehicle_velocity`
 - `/px4_visualizer/setpoint_marker`
 
+It also hosts an interactive marker server at
+`/cddp_mpc/interactive_goal`, so the packaged RViz config can drag the
+goal reference directly in the `map` frame.
+
 These are standard ROS topics for visualization. You can start `rviz2` with the
 packaged `rviz/px4_visualizer.rviz` config from either the simulation launch or
 the MPC launch using `launch_rviz:=true`.
+
+### Teleop and goal-reference inputs
+
+The controller now accepts higher-level reference inputs without bypassing the
+MPC or final safety gate:
+
+- `/teleop/cmd_vel` (`geometry_msgs/msg/TwistStamped`) for velocity teleop
+- `/joy` (`sensor_msgs/msg/Joy`) for the teleop deadman button
+- `/cddp_mpc/goal_pose` (`geometry_msgs/msg/PoseStamped`) for external/RViz goal poses
+
+These inputs feed the reference manager, which arbitrates them against the
+mission state and keeps the command path `reference -> MPC -> safety gate -> PX4`.
+Goal poses are accepted in the configured world frame (`map` by default).
+
+With the packaged RViz config, the **SetGoal** tool now targets
+`/cddp_mpc/goal_pose`, so you can drive horizontal goal updates from RViz
+without bypassing the MPC. The **Interact** tool can also drag the
+`Goal Marker`, which publishes the same `PoseStamped` interface through
+`/cddp_mpc/goal_pose`.
+
+For visualization, `px4_mpc_node` also publishes:
+
+- `/cddp_mpc/active_goal`
+- `/cddp_mpc/predicted_path`
+- `/cddp_mpc/geofence`
+- `/cddp_mpc/safety_text`
 
 ### Hardware Validation Launch
 

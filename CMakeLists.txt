@@ -15,9 +15,11 @@ set(CMAKE_BUILD_TYPE "Release") # Set the build type to Release by default
 find_package(ament_cmake REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(interactive_markers REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -45,6 +47,7 @@ add_executable(
   px4_mpc_node
   src/px4_mpc_node.cpp
   src/indi_rotational_compensator.cpp
+  src/reference_manager.cpp
   src/reference_provider.cpp
 )
 target_include_directories(px4_mpc_node PUBLIC
@@ -53,9 +56,13 @@ target_include_directories(px4_mpc_node PUBLIC
 )
 ament_target_dependencies(px4_mpc_node
   diagnostic_msgs
+  geometry_msgs
+  nav_msgs
   rclcpp
   px4_msgs
+  sensor_msgs
   std_srvs
+  visualization_msgs
   Eigen3
 )
 target_link_libraries(px4_mpc_node
@@ -71,6 +78,7 @@ ament_target_dependencies(px4_visualizer
   diagnostic_msgs
   Eigen3
   geometry_msgs
+  interactive_markers
   nav_msgs
   px4_msgs
   rclcpp
@@ -196,6 +204,26 @@ if(BUILD_TESTING)
       Threads::Threads
     )
     add_test(NAME test_reference_provider COMMAND test_reference_provider)
+  endif()
+
+  add_executable(
+    test_reference_manager
+    test/test_reference_manager.cpp
+    src/reference_manager.cpp
+  )
+  if(TARGET test_reference_manager)
+    target_include_directories(test_reference_manager PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+      ${GTEST_INCLUDE_DIR}
+    )
+    ament_target_dependencies(test_reference_manager Eigen3)
+    target_link_libraries(test_reference_manager
+      ${GTEST_LIBRARY}
+      ${GTEST_MAIN_LIBRARY}
+      Threads::Threads
+    )
+    add_test(NAME test_reference_manager COMMAND test_reference_manager)
   endif()
 
   add_executable(

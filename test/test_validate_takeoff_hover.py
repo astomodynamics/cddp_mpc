@@ -196,6 +196,19 @@ class ValidateTakeoffHoverTests(unittest.TestCase):
 
         self.assertTrue(criteria["diagnostics_ok"])
 
+    def test_prefix_configuration_is_applied_to_subscriptions(self) -> None:
+        config = self.validator_module.ValidationConfig(
+            fmu_prefix="/px4_1/fmu",
+            controller_prefix="/px4_1/cddp_mpc",
+        )
+
+        node = self.validator_module.HoverMissionValidator(config)
+
+        topics = {record["topic"] for record in node.subscriptions}
+        self.assertIn("/px4_1/fmu/out/vehicle_odometry", topics)
+        self.assertIn("/px4_1/fmu/in/offboard_control_mode", topics)
+        self.assertIn("/px4_1/cddp_mpc/status", topics)
+
     def test_landing_requirement_checks_land_done_and_disarm(self) -> None:
         config = self.validator_module.ValidationConfig(
             validation_mode="offboard",

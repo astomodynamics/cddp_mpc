@@ -26,10 +26,12 @@ class CalibrationConfig:
     max_thrust_n: float = 20.0
     include_takeoff_mode: bool = False
     require_armed_offboard: bool = True
+    fmu_prefix: str = "/fmu"
+    controller_prefix: str = "/cddp_mpc"
 
 
 class HoverMassCalibrator(Node):
-    """Collect steady hover samples from /cddp_mpc/status."""
+    """Collect steady hover samples from the configured cddp_mpc status topic."""
 
     def __init__(self, config: CalibrationConfig):
         super().__init__("hover_mass_calibrator")
@@ -56,15 +58,18 @@ class HoverMassCalibrator(Node):
         self.current_thrust = float("nan")
         self.hover_thrust_samples: list[float] = []
 
+        fmu_prefix = self.config.fmu_prefix.rstrip("/") or "/fmu"
+        controller_prefix = self.config.controller_prefix.rstrip("/") or "/cddp_mpc"
+
         self.create_subscription(
             VehicleStatus,
-            "/fmu/out/vehicle_status",
+            f"{fmu_prefix}/out/vehicle_status",
             self._status_callback,
             qos_profile,
         )
         self.create_subscription(
             DiagnosticArray,
-            "/cddp_mpc/status",
+            f"{controller_prefix}/status",
             self._diagnostic_callback,
             qos_profile,
         )
@@ -157,8 +162,10 @@ class HoverMassCalibrator(Node):
 
 def parse_args() -> CalibrationConfig:
     parser = argparse.ArgumentParser(
-        description="Estimate hover thrust calibration from /cddp_mpc/status."
+        description="Estimate hover thrust calibration from the configured cddp_mpc status topic."
     )
+    parser.add_argument("--fmu-prefix", type=str, default="/fmu")
+    parser.add_argument("--controller-prefix", type=str, default="/cddp_mpc")
     parser.add_argument("--duration-sec", type=float, default=25.0)
     parser.add_argument("--min-samples", type=int, default=30)
     parser.add_argument("--vz-threshold-mps", type=float, default=0.2)
@@ -175,6 +182,8 @@ def parse_args() -> CalibrationConfig:
         max_thrust_n=args.max_thrust_n,
         include_takeoff_mode=args.include_takeoff_mode,
         require_armed_offboard=not args.allow_unarmed,
+        fmu_prefix=args.fmu_prefix,
+        controller_prefix=args.controller_prefix,
     )
 
 
