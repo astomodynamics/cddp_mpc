@@ -2,6 +2,10 @@
 
 A ROS 2 PX4 offboard MPC package built on `cddp-cpp`.
 
+The repository also keeps the older unicycle and car MPC demo stack from the merged `#13` state as archived examples under [`legacy/README.md`](legacy/README.md). Those files are opt-in only through `-DBUILD_LEGACY_GROUND_DEMOS=ON` and are not part of the default supported PX4 workflow.
+
+![Archived ground-robot MPC demo](video/cddp_mpc_demo.gif)
+
 ## Description
 
 This package provides a single PX4-oriented controller path:

@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD 17) # Enforce C++17 as the minimum standard
 set(CMAKE_CXX_STANDARD_REQUIRED ON)  # Enforce C++17 as the minimum standard
 set(ABSL_PROPAGATE_CXX_STD ON) # Enforce C++17 for absl
 set(CMAKE_BUILD_TYPE "Release") # Set the build type to Release by default
+option(BUILD_LEGACY_GROUND_DEMOS "Build archived pre-PX4 ground-robot demo nodes" OFF)
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
@@ -85,11 +86,88 @@ ament_target_dependencies(px4_visualizer
   visualization_msgs
 )
 
+if(BUILD_LEGACY_GROUND_DEMOS)
+  find_package(tf2 REQUIRED)
+  find_package(tf2_geometry_msgs REQUIRED)
+
+  add_library(unicycle_lib
+    src/unicycle.cpp
+  )
+  target_include_directories(unicycle_lib PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_target_dependencies(unicycle_lib rclcpp geometry_msgs)
+
+  add_executable(legacy_mpc_node src/mpc_node.cpp)
+  target_include_directories(legacy_mpc_node PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_target_dependencies(legacy_mpc_node
+    rclcpp
+    geometry_msgs
+    nav_msgs
+    Eigen3
+  )
+  target_link_libraries(legacy_mpc_node cddp)
+
+  add_executable(legacy_car_mpc_node src/car_mpc_node.cpp)
+  target_include_directories(legacy_car_mpc_node PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  ament_target_dependencies(legacy_car_mpc_node
+    rclcpp
+    geometry_msgs
+    nav_msgs
+    Eigen3
+  )
+  target_link_libraries(legacy_car_mpc_node cddp)
+
+  add_executable(legacy_unicycle_robot_node
+    src/unicycle_robot_node.cpp
+  )
+  target_include_directories(legacy_unicycle_robot_node PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  target_link_libraries(legacy_unicycle_robot_node unicycle_lib)
+  ament_target_dependencies(legacy_unicycle_robot_node
+    rclcpp
+    geometry_msgs
+    nav_msgs
+    tf2
+    tf2_geometry_msgs
+  )
+
+  add_executable(legacy_teleop_keyboard_node
+    src/teleop_keyboard.cpp
+  )
+  ament_target_dependencies(legacy_teleop_keyboard_node rclcpp geometry_msgs)
+
+  add_executable(legacy_hardcoded_map_node src/hardcoded_map_node.cpp)
+  ament_target_dependencies(legacy_hardcoded_map_node rclcpp nav_msgs geometry_msgs)
+endif()
+
 install(TARGETS
   px4_mpc_node
   px4_visualizer
   DESTINATION lib/${PROJECT_NAME}
 )
+
+if(BUILD_LEGACY_GROUND_DEMOS)
+  install(TARGETS
+    legacy_mpc_node
+    legacy_car_mpc_node
+    legacy_unicycle_robot_node
+    legacy_teleop_keyboard_node
+    legacy_hardcoded_map_node
+    unicycle_lib
+    DESTINATION lib/${PROJECT_NAME}
+  )
+endif()
+
 
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME})
@@ -103,7 +181,13 @@ install(DIRECTORY rviz
 install(DIRECTORY examples
   DESTINATION share/${PROJECT_NAME})
 
+install(DIRECTORY legacy
+  DESTINATION share/${PROJECT_NAME})
+
 install(DIRECTORY standalone
+  DESTINATION share/${PROJECT_NAME})
+
+install(DIRECTORY video
   DESTINATION share/${PROJECT_NAME})
 
 install(DIRECTORY include/
