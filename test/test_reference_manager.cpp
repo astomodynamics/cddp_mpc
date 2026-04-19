@@ -65,9 +65,14 @@ TEST(ReferenceManagerTest, TeleopOverridesMissionWhenDeadmanPressed) {
   EXPECT_GT(status.target_position_enu.x(), 0.0);
 }
 
-TEST(ReferenceManagerTest, OneShotGoalRemainsActiveAfterFreshnessWindow) {
+TEST(ReferenceManagerTest, StaleGoalRevertsToMissionTargetAfterFreshnessWindow) {
   cddp_mpc::ReferenceManagerConfig config;
   config.goal_timeout_s = 1.0;
+  config.smoothing_tau_s = 0.1;
+  config.max_xy_speed_mps = 10.0;
+  config.max_z_speed_mps = 20.0;
+  config.max_xy_accel_mps2 = 20.0;
+  config.max_z_accel_mps2 = 40.0;
   cddp_mpc::ReferenceManager manager(config);
 
   manager.updateGoalPose(1.0, Eigen::Vector3d(2.0, 3.0, 4.0), 0.5);
@@ -78,11 +83,11 @@ TEST(ReferenceManagerTest, OneShotGoalRemainsActiveAfterFreshnessWindow) {
   const cddp_mpc::ReferenceStatus status =
       manager.update(3.0, Eigen::Vector3d::Zero(), 0.0, mission);
 
-  EXPECT_EQ(status.source, cddp_mpc::ReferenceSource::GoalPose);
+  EXPECT_EQ(status.source, cddp_mpc::ReferenceSource::Mission);
   EXPECT_FALSE(status.goal_fresh);
-  EXPECT_DOUBLE_EQ(status.target_position_enu.x(), 2.0);
-  EXPECT_DOUBLE_EQ(status.target_position_enu.y(), 3.0);
-  EXPECT_DOUBLE_EQ(status.target_position_enu.z(), 4.0);
+  EXPECT_DOUBLE_EQ(status.target_position_enu.x(), -1.0);
+  EXPECT_DOUBLE_EQ(status.target_position_enu.y(), -1.0);
+  EXPECT_DOUBLE_EQ(status.target_position_enu.z(), 0.0);
 }
 
 } // namespace
