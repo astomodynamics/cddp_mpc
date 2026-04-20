@@ -67,6 +67,14 @@ def _default_prefix(namespace: str, explicit_prefix: str, leaf: str) -> str:
     return f"/{leaf}"
 
 
+def _prefix_parent(prefix: str, leaf: str) -> str:
+    suffix = f"/{leaf}"
+    if prefix.endswith(suffix):
+        parent = prefix[: -len(suffix)]
+        return parent or "/"
+    return "/"
+
+
 def _rewrite_rviz_config(source_path: str, controller_prefix: str, visualizer_prefix: str) -> str:
     text = Path(source_path).read_text()
     text = text.replace("/cddp_mpc", controller_prefix)
@@ -91,9 +99,13 @@ def _build_actions(context, *args, **kwargs):
     visualizer_prefix = _default_prefix(
         namespace, LaunchConfiguration("visualizer_prefix").perform(context), "px4_visualizer"
     )
+    vehicle_prefix = _prefix_parent(controller_prefix, "cddp_mpc")
     params_overlay = LaunchConfiguration("params_overlay").perform(context).strip()
     launch_visualizer = _as_bool(LaunchConfiguration("launch_visualizer").perform(context))
     launch_rviz = _as_bool(LaunchConfiguration("launch_rviz").perform(context))
+    launch_gamepad_teleop = _as_bool(
+        LaunchConfiguration("launch_gamepad_teleop").perform(context)
+    )
 
     controller_parameters = [LaunchConfiguration("params_file")]
     if params_overlay:
@@ -120,6 +132,27 @@ def _build_actions(context, *args, **kwargs):
             parameters=controller_parameters,
         )
     ]
+
+    if launch_gamepad_teleop:
+        actions.append(
+            Node(
+                package=package_name,
+                executable="gamepad_teleop_node",
+                namespace=namespace,
+                name="gamepad_teleop",
+                output="screen",
+                parameters=[
+                    {
+                        "joy_topic": f"{vehicle_prefix}/joy"
+                        if vehicle_prefix != "/"
+                        else "/joy",
+                        "teleop_topic": f"{vehicle_prefix}/teleop/cmd_vel"
+                        if vehicle_prefix != "/"
+                        else "/teleop/cmd_vel",
+                    }
+                ],
+            )
+        )
 
     if launch_visualizer or launch_rviz:
         actions.append(
@@ -203,6 +236,11 @@ def generate_launch_description():
             DeclareLaunchArgument("target_component", default_value="1"),
             DeclareLaunchArgument("source_system", default_value="1"),
             DeclareLaunchArgument("source_component", default_value="1"),
+            DeclareLaunchArgument(
+                "launch_gamepad_teleop",
+                default_value="false",
+                description="Launch the Joy-to-TwistStamped gamepad teleop helper node.",
+            ),
             DeclareLaunchArgument(
                 "launch_visualizer",
                 default_value="false",
