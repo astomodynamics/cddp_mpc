@@ -110,7 +110,7 @@ ReferenceStatus ReferenceManager::update(double time_s,
   const bool goal_fresh = latest_goal_pose_.has_value() &&
                           (time_s - latest_goal_pose_->time_s) <=
                               std::max(config_.goal_timeout_s, 0.0);
-  const bool goal_active = latest_goal_pose_.has_value();
+  const bool goal_active = goal_fresh;
 
   const double dt_s = last_update_time_s_.has_value()
                           ? std::clamp(time_s - *last_update_time_s_, 0.0, 0.5)
