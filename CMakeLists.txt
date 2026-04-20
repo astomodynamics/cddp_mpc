@@ -86,7 +86,7 @@ ament_target_dependencies(px4_visualizer
   visualization_msgs
 )
 
-add_executable(gamepad_teleop_node src/teleop_keyboard.cpp)
+add_executable(gamepad_teleop_node src/gamepad_teleop_node.cpp)
 ament_target_dependencies(gamepad_teleop_node
   geometry_msgs
   rclcpp
@@ -151,7 +151,7 @@ if(BUILD_LEGACY_GROUND_DEMOS)
   add_executable(legacy_teleop_keyboard_node
     src/teleop_keyboard.cpp
   )
-  ament_target_dependencies(legacy_teleop_keyboard_node rclcpp geometry_msgs sensor_msgs)
+  ament_target_dependencies(legacy_teleop_keyboard_node rclcpp geometry_msgs)
 
   add_executable(legacy_hardcoded_map_node src/hardcoded_map_node.cpp)
   ament_target_dependencies(legacy_hardcoded_map_node rclcpp nav_msgs geometry_msgs)

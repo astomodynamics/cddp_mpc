@@ -75,6 +75,12 @@ def _prefix_parent(prefix: str, leaf: str) -> str:
     return "/"
 
 
+def _vehicle_topic(prefix: str, leaf: str) -> str:
+    if prefix == "/":
+        return f"/{leaf}"
+    return f"{prefix}/{leaf}"
+
+
 def _rewrite_rviz_config(source_path: str, controller_prefix: str, visualizer_prefix: str) -> str:
     text = Path(source_path).read_text()
     text = text.replace("/cddp_mpc", controller_prefix)
@@ -100,6 +106,8 @@ def _build_actions(context, *args, **kwargs):
         namespace, LaunchConfiguration("visualizer_prefix").perform(context), "px4_visualizer"
     )
     vehicle_prefix = _prefix_parent(controller_prefix, "cddp_mpc")
+    joy_topic = _vehicle_topic(vehicle_prefix, "joy")
+    teleop_topic = _vehicle_topic(vehicle_prefix, "teleop/cmd_vel")
     params_overlay = LaunchConfiguration("params_overlay").perform(context).strip()
     launch_visualizer = _as_bool(LaunchConfiguration("launch_visualizer").perform(context))
     launch_rviz = _as_bool(LaunchConfiguration("launch_rviz").perform(context))
@@ -115,6 +123,8 @@ def _build_actions(context, *args, **kwargs):
             "fmu_prefix": fmu_prefix,
             "controller_prefix": controller_prefix,
             "goal_pose_topic": f"{controller_prefix}/goal_pose",
+            "joy_topic": joy_topic,
+            "teleop_topic": teleop_topic,
             "target_system": int(LaunchConfiguration("target_system").perform(context)),
             "target_component": int(LaunchConfiguration("target_component").perform(context)),
             "source_system": int(LaunchConfiguration("source_system").perform(context)),
@@ -143,12 +153,8 @@ def _build_actions(context, *args, **kwargs):
                 output="screen",
                 parameters=[
                     {
-                        "joy_topic": f"{vehicle_prefix}/joy"
-                        if vehicle_prefix != "/"
-                        else "/joy",
-                        "teleop_topic": f"{vehicle_prefix}/teleop/cmd_vel"
-                        if vehicle_prefix != "/"
-                        else "/teleop/cmd_vel",
+                        "joy_topic": joy_topic,
+                        "teleop_topic": teleop_topic,
                     }
                 ],
             )
