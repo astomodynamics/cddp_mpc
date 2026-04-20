@@ -86,6 +86,13 @@ ament_target_dependencies(px4_visualizer
   visualization_msgs
 )
 
+add_executable(gamepad_teleop_node src/gamepad_teleop_node.cpp)
+ament_target_dependencies(gamepad_teleop_node
+  geometry_msgs
+  rclcpp
+  sensor_msgs
+)
+
 if(BUILD_LEGACY_GROUND_DEMOS)
   find_package(tf2 REQUIRED)
   find_package(tf2_geometry_msgs REQUIRED)
@@ -151,6 +158,7 @@ if(BUILD_LEGACY_GROUND_DEMOS)
 endif()
 
 install(TARGETS
+  gamepad_teleop_node
   px4_mpc_node
   px4_visualizer
   DESTINATION lib/${PROJECT_NAME}

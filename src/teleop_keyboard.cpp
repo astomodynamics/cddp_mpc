@@ -28,14 +28,14 @@ public:
     // Start the keyboard reading thread.
     keyboard_thread_ = std::thread(std::bind(&TeleopKeyboard::keyboardLoop, this));
   }
-  
+
   ~TeleopKeyboard() {
     exit_requested_ = true;
     if (keyboard_thread_.joinable()) {
       keyboard_thread_.join();
     }
   }
-  
+
 private:
   void keyboardLoop() {
     char c;
@@ -43,14 +43,14 @@ private:
     double angular_vel = 0.0;
     const double linear_step = 0.1;
     const double angular_step = 0.1;
-    
+
     // Set terminal to raw mode for immediate key press reading.
     struct termios oldt, newt;
     tcgetattr(STDIN_FILENO, &oldt);
     newt = oldt;
     newt.c_lflag &= ~(ICANON | ECHO);
     tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-    
+
     std::cout << "\nTeleop Keyboard Control for robot: " << robot_id_ << "\n";
     std::cout << "-----------------------------------------\n";
     std::cout << "w: increase forward speed\n";
@@ -59,7 +59,7 @@ private:
     std::cout << "d: turn right\n";
     std::cout << "x: stop\n";
     std::cout << "q: quit\n";
-    
+
     while (rclcpp::ok() && !exit_requested_) {
       if (read(STDIN_FILENO, &c, 1) > 0) {
         geometry_msgs::msg::Twist twist_msg;
@@ -89,14 +89,14 @@ private:
         twist_msg.linear.x = linear_vel;
         twist_msg.angular.z = angular_vel;
         publisher_->publish(twist_msg);
-        std::cout << "Published to " << robot_id_ << "/cmd_vel: linear = " 
+        std::cout << "Published to " << robot_id_ << "/cmd_vel: linear = "
                   << twist_msg.linear.x << ", angular = " << twist_msg.angular.z << "\n";
       }
     }
     // Restore terminal settings before exit.
     tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
   }
-  
+
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_;
   std::thread keyboard_thread_;
   bool exit_requested_{false};
